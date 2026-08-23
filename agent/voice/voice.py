@@ -680,20 +680,49 @@ class Transcriber:
         return m
 
     def _google_transcribe(self, audio, lang="my-MM"):
-        """Transcribe audio using Google's Speech-to-Text API (95%+ accuracy for Burmese)."""
+        """Transcribe audio using Google's Speech-to-Text API (95%+ accuracy for Burmese).
+        Uses native in-memory FLAC encoding via soundfile with zero external binaries."""
         try:
-            import speech_recognition as sr
+            import io, json, urllib.request, urllib.parse
+            import soundfile as sf
             import numpy as np
-            # Convert float32 [-1.0, 1.0] to int16 PCM
-            if audio.dtype != np.int16:
-                audio_int16 = (np.clip(audio, -1.0, 1.0) * 32767).astype(np.int16)
+
+            # Ensure float32 audio
+            if audio.dtype != np.float32:
+                audio_float = audio.astype(np.float32) / 32767.0
             else:
-                audio_int16 = audio
-            rec = sr.Recognizer()
-            audio_data = sr.AudioData(audio_int16.tobytes(), 16000, 2)
-            text = rec.recognize_google(audio_data, language=lang)
-            return (text or "").strip()
+                audio_float = audio
+
+            flac_buf = io.BytesIO()
+            sf.write(flac_buf, audio_float, 16000, format="FLAC", subtype="PCM_16")
+            flac_data = flac_buf.getvalue()
+
+            key = "AIzaSyBOti4mM-6x9WDnZIjIeyEU21OpBXqWBgw"
+            params = urllib.parse.urlencode({
+                "client": "chromium",
+                "lang": lang,
+                "key": key,
+                "pFilter": 0
+            })
+            url = f"http://www.google.com/speech-api/v2/recognize?{params}"
+            headers = {"Content-Type": "audio/x-flac; rate=16000", "User-Agent": "Mozilla/5.0"}
+
+            req = urllib.request.Request(url, data=flac_data, headers=headers)
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                for line in resp.read().decode("utf-8").splitlines():
+                    if not line.strip():
+                        continue
+                    d = json.loads(line)
+                    results = d.get("result", [])
+                    if results:
+                        alts = results[0].get("alternative", [])
+                        if alts:
+                            transcript = alts[0].get("transcript", "").strip()
+                            if transcript:
+                                return transcript
+            return None
         except Exception as e:
+            log("stt", f"{C['am']}Google STT request failed ({e}){C['x']}", "am")
             return None
 
     def __call__(self, audio):
