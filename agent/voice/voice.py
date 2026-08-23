@@ -983,16 +983,63 @@ class Mouth:
         """Detect configured cloud TTS provider and API key."""
         api_key = (self.cfg.get("api_key") or self.cfg.get("tts_api_key") or
                    os.environ.get("TTS_API_KEY") or os.environ.get("ELEVEN_API_KEY") or
+                   os.environ.get("OPENAI_API_KEY") or
                    os.environ.get("GOOGLE_TTS_API_KEY") or "").strip()
         provider = self.cfg.get("provider", "auto")
         if not api_key:
             return None, None
         if provider == "auto":
-            if api_key.startswith("AIzaSy"):
+            if api_key.startswith("sk-"):
+                provider = "openai"
+            elif api_key.startswith("AIzaSy"):
                 provider = "google_cloud"
             else:
                 provider = "elevenlabs"
         return provider, api_key
+
+    def _speak_openai(self, text, api_key, on_level=None):
+        """Synthesize ultra-smooth human speech using OpenAI TTS (tts-1)."""
+        import io, json, urllib.request
+        import numpy as np, sounddevice as sd, soundfile as sf
+        try:
+            f = bus.face()
+            gender = f.get("gender", "male")
+            age = f.get("age", 25)
+            if gender == "female":
+                voice = "nova" if age < 35 else "shimmer"
+            else:
+                voice = "alloy" if age < 35 else ("echo" if age < 55 else "onyx")
+            
+            url = "https://api.openai.com/v1/audio/speech"
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "model": "tts-1",
+                "input": text,
+                "voice": voice
+            }
+            req = urllib.request.Request(url, data=json.dumps(payload).encode(),
+                                         headers=headers, method="POST")
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                audio, rate = sf.read(io.BytesIO(resp.read()), dtype="float32")
+                if audio.ndim > 1:
+                    audio = audio.mean(axis=1)
+
+            block = 1024
+            with sd.OutputStream(samplerate=rate, channels=1, dtype="float32") as out:
+                for i in range(0, len(audio), block):
+                    if self.stop_flag.is_set():
+                        break
+                    b = audio[i:i + block].astype("float32")
+                    if on_level:
+                        on_level(min(1.0, float(np.sqrt(np.mean(np.square(b)))) * 4))
+                    out.write(b.reshape(-1, 1))
+            return True
+        except Exception as e:
+            log("tts", f"{C['am']}OpenAI TTS failed ({e}); falling back to Edge-TTS{C['x']}", "am")
+            return False
 
     def _speak_elevenlabs(self, text, api_key, on_level=None):
         """Synthesize ultra-human speech using ElevenLabs Multilingual v2."""
@@ -1045,13 +1092,13 @@ class Mouth:
             return False
 
     def _speak_google_cloud(self, text, api_key, on_level=None):
-        """Synthesize studio-quality speech using Google Cloud Text-to-Speech (Neural2)."""
+        """Synthesize speech using Google Cloud Text-to-Speech."""
         import io, json, base64, urllib.request
         import numpy as np, sounddevice as sd, soundfile as sf
         try:
             f = bus.face()
             gender = f.get("gender", "male")
-            voice_name = "my-MM-Neural2-A" if gender == "female" else "my-MM-Standard-A"
+            voice_name = "my-MM-Standard-A"
             ssml_gender = "FEMALE" if gender == "female" else "MALE"
             
             url = f"https://texttospeech.googleapis.com/v1/text:synthesize?key={api_key}"
@@ -1091,12 +1138,12 @@ class Mouth:
                     out.write(b.reshape(-1, 1))
             return True
         except Exception as e:
-            log("tts", f"{C['am']}Google Cloud TTS failed ({e}); falling back to Edge-TTS{C['x']}", "am")
+            log("tts", f"{C['am']}Google Cloud TTS unavailable ({e}); falling back to Edge-TTS{C['x']}", "am")
             return False
 
     def _speak_burmese(self, text, on_level=None):
         """Synthesize Burmese dynamically matching the active face persona.
-        Prefers ElevenLabs Multilingual v2 / Google Cloud Neural2 when API key is provided."""
+        Prefers ElevenLabs Multilingual v2 / OpenAI TTS when API key is provided."""
         text = format_burmese_for_speech(clean_spoken_text(text))
         if not text.strip():
             return True
@@ -1104,6 +1151,9 @@ class Mouth:
         provider, key = self._get_cloud_tts_config()
         if provider == "elevenlabs" and key:
             if self._speak_elevenlabs(text, key, on_level):
+                return True
+        elif provider == "openai" and key:
+            if self._speak_openai(text, key, on_level):
                 return True
         elif provider == "google_cloud" and key:
             if self._speak_google_cloud(text, key, on_level):

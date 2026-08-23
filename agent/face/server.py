@@ -41,8 +41,10 @@ class Handler(BaseHTTPRequestHandler):
             provider = "Free Edge-TTS"
             masked = ""
             if raw_key:
-                if raw_key.startswith("AIzaSy"):
-                    provider = "Google Cloud Neural2"
+                if raw_key.startswith("sk-"):
+                    provider = "OpenAI TTS (tts-1)"
+                elif raw_key.startswith("AIzaSy"):
+                    provider = "Google Cloud TTS"
                 else:
                     provider = "ElevenLabs Multilingual v2"
                 masked = ("•" * 16) + (raw_key[-4:] if len(raw_key) > 4 else "")
