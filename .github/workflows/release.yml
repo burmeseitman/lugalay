@@ -71,17 +71,17 @@ jobs:
 
       # ---- icons: generated, so the repo carries no binaries ----
       - name: Build icons
-        run: python build/make_icons.py
+        run: python packaging/make_icons.py
         shell: bash
 
       - name: Sanity check — everything imports and parses
-        run: python build/preflight.py
+        run: python packaging/preflight.py
         shell: bash
 
       - name: Build
         env:
           LUGALAY_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '0.0.0-dev' }}
-        run: pyinstaller --noconfirm --clean build/lugalay.spec
+        run: pyinstaller --noconfirm --clean packaging/lugalay.spec
         shell: bash
 
       # ---- package one file per platform ----

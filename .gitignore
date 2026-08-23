@@ -18,10 +18,9 @@ memory/
 .setup-test-backup/
 old-terminal-shortcuts/
 
-# ── build output ──
-build/
-dist/
-*.spec.bak
+# ── build output (PyInstaller writes these) ──
+/build/
+/dist/
 
 # ── macOS ──
 .DS_Store
@@ -30,7 +29,7 @@ dist/
 agent/config.json
 
 # generated at build time
-build/icon.icns
-build/icon.ico
-build/icon.png
-build/*.iconset/
+packaging/icon.icns
+packaging/icon.ico
+packaging/icon.png
+packaging/*.iconset/
