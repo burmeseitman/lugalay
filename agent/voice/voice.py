@@ -933,7 +933,7 @@ class Mouth:
             return False
 
     def _speak_burmese_edge(self, text, on_level=None):
-        """Synthesize Burmese using Microsoft's Neural Edge-TTS."""
+        """Synthesize Burmese using Microsoft's Neural Edge-TTS matching the active persona."""
         import asyncio, tempfile
         import numpy as np, sounddevice as sd, soundfile as sf
         try:
@@ -946,9 +946,9 @@ class Mouth:
         v = (f.get("voice") or {})
         gender = f.get("gender", "male")
         default_my = "my-MM-NilarNeural" if gender == "female" else "my-MM-ThihaNeural"
-        voice = v.get("my", self.cfg.get("burmese_voice", default_my))
-        rate = v.get("my_rate", self.cfg.get("burmese_rate", "-2%"))
-        pitch = v.get("my_pitch", self.cfg.get("burmese_pitch", "+0Hz"))
+        voice = v.get("my", default_my)
+        rate = v.get("my_rate", "-2%")
+        pitch = v.get("my_pitch", "+0Hz")
         tmp = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
         tmp.close()
         try:
@@ -977,15 +977,18 @@ class Mouth:
         return True
 
     def _speak_burmese(self, text, on_level=None):
-        """Synthesize Burmese using Google Free TTS first, with automatic Edge-TTS fallback."""
+        """Synthesize Burmese dynamically matching the active face persona."""
         text = format_burmese_for_speech(clean_spoken_text(text))
         if not text.strip():
             return True
 
-        engine = self.cfg.get("burmese_engine", "google")
-        if engine == "google":
+        f = bus.face()
+        gender = f.get("gender", "male")
+        # If user explicitly configured google engine AND the active face is female:
+        if self.cfg.get("burmese_engine") == "google" and gender == "female":
             if self._speak_burmese_google(text, on_level):
                 return True
+
         return self._speak_burmese_edge(text, on_level)
 
     def _say_fallback(self, text):

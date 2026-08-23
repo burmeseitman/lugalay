@@ -98,7 +98,7 @@
       "wrinkles": false,
       "voice": {
         "my": "my-MM-ThihaNeural",
-        "my_rate": "+3%",
+        "my_rate": "+2%",
         "my_pitch": "+0Hz",
         "en": "am_adam"
       }
@@ -117,8 +117,8 @@
       "wrinkles": false,
       "voice": {
         "my": "my-MM-NilarNeural",
-        "my_rate": "+2%",
-        "my_pitch": "+0Hz",
+        "my_rate": "+0%",
+        "my_pitch": "+1Hz",
         "en": "af_heart"
       }
     },
@@ -136,8 +136,8 @@
       "wrinkles": false,
       "voice": {
         "my": "my-MM-ThihaNeural",
-        "my_rate": "+0%",
-        "my_pitch": "+0Hz",
+        "my_rate": "-2%",
+        "my_pitch": "-3Hz",
         "en": "bm_fable"
       }
     },
@@ -155,8 +155,8 @@
       "wrinkles": false,
       "voice": {
         "my": "my-MM-NilarNeural",
-        "my_rate": "-2%",
-        "my_pitch": "+0Hz",
+        "my_rate": "-3%",
+        "my_pitch": "-2Hz",
         "en": "bf_isabella"
       }
     },
@@ -168,14 +168,14 @@
       "skin": "#c59a74",
       "shade": "#a2795a",
       "hair": "#b9b3ab",
-      "style": "receding",
-      "shirt": "#4a4f57",
-      "beard": true,
+      "style": "short",
+      "shirt": "#473b32",
+      "beard": false,
       "wrinkles": true,
       "voice": {
         "my": "my-MM-ThihaNeural",
         "my_rate": "-6%",
-        "my_pitch": "+0Hz",
+        "my_pitch": "-7Hz",
         "en": "bm_george"
       }
     }
