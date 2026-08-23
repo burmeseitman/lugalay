@@ -38,13 +38,15 @@
   },
   "tts": {
     "engine": "auto",
+    "provider": "auto",
+    "api_key": "",
+    "_api_key_note": "Paste either your ElevenLabs API Key or Google Cloud API Key here. If set, ElevenLabs Multilingual v2 or Google Cloud Neural2 will speak in ultra-human voice. Leave empty to use free Microsoft Edge-TTS.",
     "voice": "bm_lewis",
     "burmese_voice": "my-MM-ThihaNeural",
     "speed": 1.0,
     "fallback_voice": "Daniel",
     "burmese_rate": "+0%",
-    "burmese_pitch": "+0Hz",
-    "_voice_note": "Thiha chosen by ear over Nilar and the slower variants. burmese_rate/-pitch accept edge-tts values like '-10%' / '-4Hz'. Microsoft my-MM is the only free Burmese voice that exists — Kokoro and macOS have none."
+    "burmese_pitch": "+0Hz"
   },
   "brain": {
     "cmd": "claude",

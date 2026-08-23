@@ -979,17 +979,134 @@ class Mouth:
                 out.write(b.reshape(-1, 1))
         return True
 
+    def _get_cloud_tts_config(self):
+        """Detect configured cloud TTS provider and API key."""
+        api_key = (self.cfg.get("api_key") or self.cfg.get("tts_api_key") or
+                   os.environ.get("TTS_API_KEY") or os.environ.get("ELEVEN_API_KEY") or
+                   os.environ.get("GOOGLE_TTS_API_KEY") or "").strip()
+        provider = self.cfg.get("provider", "auto")
+        if not api_key:
+            return None, None
+        if provider == "auto":
+            if api_key.startswith("AIzaSy"):
+                provider = "google_cloud"
+            else:
+                provider = "elevenlabs"
+        return provider, api_key
+
+    def _speak_elevenlabs(self, text, api_key, on_level=None):
+        """Synthesize ultra-human speech using ElevenLabs Multilingual v2."""
+        import io, json, urllib.request
+        import numpy as np, sounddevice as sd, soundfile as sf
+        try:
+            f = bus.face()
+            gender = f.get("gender", "male")
+            age = f.get("age", 25)
+            # Standard high-quality ElevenLabs voice IDs matched to personas
+            if gender == "female":
+                default_voice = "21m00Tcm4TlvDq8ikWAM" if age < 35 else "EXAVITQu4vr4xnSDxMaL"  # Rachel / Bella
+            else:
+                default_voice = "pNInz6obpgDQGcFmaJgB" if age < 35 else ("ErXwobaYiN019PkySvjV" if age < 55 else "onwK4e9ZLuTAKqWW03F9")  # Adam / Antoni / Daniel
+            
+            voice_id = (f.get("voice") or {}).get("elevenlabs_voice_id", default_voice)
+            url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+            headers = {
+                "xi-api-key": api_key,
+                "Content-Type": "application/json",
+                "Accept": "audio/mpeg"
+            }
+            payload = {
+                "text": text,
+                "model_id": self.cfg.get("elevenlabs_model", "eleven_multilingual_v2"),
+                "voice_settings": {
+                    "stability": 0.5,
+                    "similarity_boost": 0.8
+                }
+            }
+            req = urllib.request.Request(url, data=json.dumps(payload).encode(),
+                                         headers=headers, method="POST")
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                audio, rate = sf.read(io.BytesIO(resp.read()), dtype="float32")
+                if audio.ndim > 1:
+                    audio = audio.mean(axis=1)
+
+            block = 1024
+            with sd.OutputStream(samplerate=rate, channels=1, dtype="float32") as out:
+                for i in range(0, len(audio), block):
+                    if self.stop_flag.is_set():
+                        break
+                    b = audio[i:i + block].astype("float32")
+                    if on_level:
+                        on_level(min(1.0, float(np.sqrt(np.mean(np.square(b)))) * 4))
+                    out.write(b.reshape(-1, 1))
+            return True
+        except Exception as e:
+            log("tts", f"{C['am']}ElevenLabs TTS failed ({e}); falling back to Edge-TTS{C['x']}", "am")
+            return False
+
+    def _speak_google_cloud(self, text, api_key, on_level=None):
+        """Synthesize studio-quality speech using Google Cloud Text-to-Speech (Neural2)."""
+        import io, json, base64, urllib.request
+        import numpy as np, sounddevice as sd, soundfile as sf
+        try:
+            f = bus.face()
+            gender = f.get("gender", "male")
+            voice_name = "my-MM-Neural2-A" if gender == "female" else "my-MM-Standard-A"
+            ssml_gender = "FEMALE" if gender == "female" else "MALE"
+            
+            url = f"https://texttospeech.googleapis.com/v1/text:synthesize?key={api_key}"
+            headers = {"Content-Type": "application/json"}
+            payload = {
+                "input": {"text": text},
+                "voice": {
+                    "languageCode": "my-MM",
+                    "name": (f.get("voice") or {}).get("google_cloud_voice", voice_name),
+                    "ssmlGender": ssml_gender
+                },
+                "audioConfig": {
+                    "audioEncoding": "MP3",
+                    "sampleRateHertz": 24000
+                }
+            }
+            req = urllib.request.Request(url, data=json.dumps(payload).encode(),
+                                         headers=headers, method="POST")
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+                raw_b64 = body.get("audioContent", "")
+                if not raw_b64:
+                    return False
+                audio_bytes = base64.b64decode(raw_b64)
+                audio, rate = sf.read(io.BytesIO(audio_bytes), dtype="float32")
+                if audio.ndim > 1:
+                    audio = audio.mean(axis=1)
+
+            block = 1024
+            with sd.OutputStream(samplerate=rate, channels=1, dtype="float32") as out:
+                for i in range(0, len(audio), block):
+                    if self.stop_flag.is_set():
+                        break
+                    b = audio[i:i + block].astype("float32")
+                    if on_level:
+                        on_level(min(1.0, float(np.sqrt(np.mean(np.square(b)))) * 4))
+                    out.write(b.reshape(-1, 1))
+            return True
+        except Exception as e:
+            log("tts", f"{C['am']}Google Cloud TTS failed ({e}); falling back to Edge-TTS{C['x']}", "am")
+            return False
+
     def _speak_burmese(self, text, on_level=None):
-        """Synthesize Burmese dynamically matching the active face persona."""
+        """Synthesize Burmese dynamically matching the active face persona.
+        Prefers ElevenLabs Multilingual v2 / Google Cloud Neural2 when API key is provided."""
         text = format_burmese_for_speech(clean_spoken_text(text))
         if not text.strip():
             return True
 
-        f = bus.face()
-        gender = f.get("gender", "male")
-        # If user explicitly configured google engine AND the active face is female:
-        if self.cfg.get("burmese_engine") == "google" and gender == "female":
-            if self._speak_burmese_google(text, on_level):
+        provider, key = self._get_cloud_tts_config()
+        if provider == "elevenlabs" and key:
+            if self._speak_elevenlabs(text, key, on_level):
+                return True
+        elif provider == "google_cloud" and key:
+            if self._speak_google_cloud(text, key, on_level):
                 return True
 
         return self._speak_burmese_edge(text, on_level)
