@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Set up</title>
+<style>
+  :root{--bg:#04070a;--fg:#dceaf0;--dim:#7d93a1;--accent:#39d0d8}
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);
+    font-family:-apple-system,"Helvetica Neue",sans-serif}
+  body{display:flex;align-items:center;justify-content:center;padding:26px}
+  .card{width:100%;max-width:360px}
+  h1{font-size:13px;letter-spacing:.28em;text-transform:uppercase;
+     color:var(--accent);margin:0 0 6px;font-weight:600}
+  p.sub{margin:0 0 22px;font-size:13px;line-height:1.6;color:var(--dim)}
+  label{display:block;font-size:10px;letter-spacing:.18em;text-transform:uppercase;
+        color:var(--dim);margin:16px 0 6px}
+  input,select{width:100%;background:#0b141a;border:1px solid #1e2f38;color:var(--fg);
+    padding:11px 12px;font:inherit;font-size:15px;border-radius:6px;outline:none}
+  input:focus,select:focus{border-color:var(--accent)}
+  .row{display:flex;gap:10px}
+  .row>*{flex:1}
+  button{width:100%;margin-top:24px;background:var(--accent);border:0;color:#04212a;
+    padding:13px;font:inherit;font-size:13px;font-weight:700;letter-spacing:.16em;
+    text-transform:uppercase;border-radius:6px;cursor:pointer}
+  button:disabled{opacity:.5;cursor:default}
+  .note{margin-top:14px;font-size:11px;line-height:1.6;color:var(--dim);opacity:.8}
+  .err{color:#ff8a72;font-size:12px;margin-top:10px;min-height:16px}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Welcome</h1>
+  <p class="sub">A couple of questions, then your assistant is yours.
+     You can change any of it later in <code>agent/config.json</code>.</p>
+
+  <label for="user">What should it call you?</label>
+  <input id="user" autocomplete="off" placeholder="your name">
+
+  <div class="row">
+    <div>
+      <label for="agent">Assistant's name</label>
+      <input id="agent" autocomplete="off" value="Lugalay">
+    </div>
+    <div>
+      <label for="language">Answers in</label>
+      <select id="language">
+        <option value="my">Burmese</option>
+        <option value="en">English</option>
+      </select>
+    </div>
+  </div>
+
+  <label for="face">Voice &amp; face</label>
+  <select id="face"></select>
+
+  <button id="go">Start</button>
+  <div class="err" id="err"></div>
+  <p class="note">Speak English to it, or type Burmese — it answers in whichever
+     language you chose. Nothing here leaves this machine.</p>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+
+(async()=>{
+  // pre-fill from the macOS account, but never assume it is right
+  try{
+    const d=await (await fetch("/setup-defaults")).json();
+    $("user").value = d.detected || "";
+    $("agent").value = d.agent || "Lugalay";
+    (d.faces||[]).forEach((f,i)=>{
+      const o=document.createElement("option");
+      o.value=f.id;
+      o.textContent=`${f.name} · ${f.gender==="male"?"male":"female"} ${f.age}`;
+      $("face").appendChild(o);
+    });
+  }catch(e){}
+  $("user").focus(); $("user").select();
+})();
+
+async function submit(){
+  const user=$("user").value.trim();
+  if(!user){ $("err").textContent="Please enter a name."; $("user").focus(); return; }
+  $("go").disabled=true; $("err").textContent="";
+  try{
+    const r=await fetch("/setup",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({user, agent:$("agent").value.trim(),
+                           language:$("language").value, face:$("face").value})});
+    if(!r.ok) throw new Error((await r.json()).error||"setup failed");
+    // hand back to the app, which starts the voice and swaps to the face
+    const api=window.pywebview&&window.pywebview.api;
+    if(api&&api.setup_finished){ api.setup_finished(); }
+    else{ location.href="/"; }
+  }catch(e){
+    $("err").textContent=String(e.message||e);
+    $("go").disabled=false;
+  }
+}
+$("go").addEventListener("click",submit);
+addEventListener("keydown",e=>{ if(e.key==="Enter") submit(); });
+</script>
+</body>
+</html>

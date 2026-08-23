@@ -1,0 +1,8 @@
+sounddevice>=0.4.6
+soundfile>=0.12.1
+numpy>=1.26
+faster-whisper>=1.0.3
+kokoro-onnx>=0.4.9
+pynput>=1.7.7
+edge-tts>=7.0.0
+pywebview>=5.0

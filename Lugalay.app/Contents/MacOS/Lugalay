@@ -1,0 +1,17 @@
+#!/bin/bash
+# Lugalay desktop launcher, for running from a checkout.
+#
+# A .app bundle is executed directly by macOS, so nothing here opens a
+# Terminal window. Output goes to the agent's log instead.
+#
+# Packaged releases do not use this file — PyInstaller builds its own
+# launcher. This exists so the repo can be run in place.
+#
+# Resolve the checkout from where this bundle actually lives, rather than
+# assuming a path in somebody's home directory.
+SELF="$(cd "$(dirname "$0")/../../.." && pwd)"
+AGENT="$SELF/agent"
+[ -f "$AGENT/app.py" ] || AGENT="$HOME/Projects/luagalay/agent"
+PY="$AGENT/voice/.venv/bin/python"
+[ -x "$PY" ] || PY="$(command -v python3)"
+exec "$PY" "$AGENT/app.py"

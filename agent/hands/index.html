@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Lugalay · hands</title>
+<style>
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;background:#04070a;overflow:hidden;
+            font-family:"SF Mono",ui-monospace,Menlo,monospace;color:#7d93a1}
+  #cam{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;
+       transform:scaleX(-1);opacity:.18;filter:grayscale(.7) contrast(1.1)}
+  #veil{position:fixed;inset:0;background:
+        radial-gradient(ellipse at center,rgba(4,7,10,.35),rgba(4,7,10,.92))}
+  canvas{position:fixed;inset:0;width:100vw;height:100vh}
+  #hud{position:fixed;left:0;right:0;bottom:0;padding:20px 28px;display:flex;
+       justify-content:space-between;gap:20px;font-size:11px;letter-spacing:.16em;
+       text-transform:uppercase;pointer-events:none}
+  #hint{opacity:.3}
+  #boot{position:fixed;inset:0;display:grid;place-items:center;text-align:center;
+        background:#04070a;transition:opacity .6s;z-index:9;padding:30px}
+  #boot.gone{opacity:0;pointer-events:none}
+  #boot h1{font-size:15px;letter-spacing:.3em;color:#39d0d8;margin:0 0 14px;
+           font-weight:600}
+  #boot p{font-size:13px;line-height:1.7;max-width:46ch;margin:0 auto;
+          letter-spacing:.02em}
+  #boot button{margin-top:22px;background:transparent;border:1px solid #39d0d8;
+    color:#39d0d8;padding:11px 26px;font:inherit;font-size:12px;letter-spacing:.2em;
+    text-transform:uppercase;cursor:pointer;border-radius:3px}
+  #boot button:hover{background:rgba(57,208,216,.12)}
+  .err{color:#e2604a !important}
+</style>
+</head>
+<body>
+<video id="cam" autoplay playsinline muted></video>
+<div id="veil"></div>
+<canvas id="c"></canvas>
+<div id="hud">
+  <div id="count">0 cards</div>
+  <div id="hint">pinch to grab · pinch + hold 1s over a card to delete · open palm to release</div>
+</div>
+<div id="boot">
+  <div>
+    <h1>LUGALAY · HANDS</h1>
+    <p id="bootmsg">Your webcam stays on this machine. Nothing is uploaded,
+      nothing is recorded — the video never leaves the browser tab.</p>
+    <button id="go">Start the board</button>
+  </div>
+</div>
+
+<script type="module">
+import { FilesetResolver, HandLandmarker }
+  from "/vendor/vision_bundle.mjs";
+
+const cv=document.getElementById("c"), ctx=cv.getContext("2d");
+const cam=document.getElementById("cam");
+const $count=document.getElementById("count");
+const $boot=document.getElementById("boot"), $msg=document.getElementById("bootmsg");
+let W=0,H=0,DPR=1, NAME="Lugalay";
+function resize(){ DPR=Math.min(devicePixelRatio||1,2); W=innerWidth; H=innerHeight;
+  cv.width=W*DPR; cv.height=H*DPR; ctx.setTransform(DPR,0,0,DPR,0,0); }
+addEventListener("resize",resize); resize();
+
+/* ---------- board ---------- */
+let cards=[], dirty=false;
+async function loadBoard(){
+  try{ cards=(await (await fetch("/board",{cache:"no-store"})).json()).cards||[]; }
+  catch(e){ cards=[]; }
+  for(const c of cards) if(c.img===undefined && c.kind==="image"){
+    const im=new Image(); im.src=c.src; c.img=im;
+  }
+}
+async function saveBoard(){
+  if(!dirty) return; dirty=false;
+  const out={cards:cards.map(({img,grabbed,held,...rest})=>rest)};
+  try{ await fetch("/board",{method:"POST",headers:{"Content-Type":"application/json"},
+       body:JSON.stringify(out)}); }catch(e){}
+}
+setInterval(saveBoard,1200);
+// poll so `present.py` additions appear without a refresh
+setInterval(async()=>{
+  if(hands.some(h=>h.grab)) return;             // never yank a card mid-drag
+  try{
+    const d=await (await fetch("/board",{cache:"no-store"})).json();
+    if((d.cards||[]).length!==cards.length){
+      const keep=new Map(cards.map(c=>[c.id,c.img]));
+      cards=d.cards||[];
+      for(const c of cards){ if(c.kind==="image"){
+        c.img=keep.get(c.id); if(!c.img){ c.img=new Image(); c.img.src=c.src; } } }
+    }
+  }catch(e){}
+},1500);
+
+/* ---------- hand tracking ---------- */
+let landmarker=null, mouseMode=false;
+addEventListener("mousemove",e=>{ if(!mouseMode) return;
+  hands[0].on=true; hands[0].x=e.clientX; hands[0].y=e.clientY; });
+addEventListener("mousedown",()=>{ if(mouseMode) hands[0].mouseDown=true; });
+addEventListener("mouseup",  ()=>{ if(mouseMode) hands[0].mouseDown=false; });
+const hands=[{},{}].map(()=>({on:false,x:0,y:0,pinch:0,grab:null,dx:0,dy:0,
+                              holdStart:0,lm:null}));
+
+async function boot(){
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({
+      video:{width:{ideal:960},height:{ideal:720},facingMode:"user"},audio:false});
+    cam.srcObject=stream;
+    await cam.play();
+  }catch(e){
+    // No camera is not a dead end — the board still works with a mouse.
+    mouseMode=true;
+    document.getElementById("hint").textContent=
+      "mouse mode (no camera: "+e.name+") · drag to move · hold 1s to delete";
+    document.getElementById("cam").style.display="none";
+    try{ NAME=(await (await fetch("/config")).json()).name||"Lugalay"; }catch(_){}
+    await loadBoard();
+    $boot.classList.add("gone");
+    document.body.style.cursor="crosshair";
+    requestAnimationFrame(loop);
+    return;
+  }
+  try{
+    const fileset=await FilesetResolver.forVisionTasks("/vendor/wasm");
+    landmarker=await HandLandmarker.createFromOptions(fileset,{
+      baseOptions:{modelAssetPath:"/vendor/hand_landmarker.task",delegate:"GPU"},
+      numHands:2, runningMode:"VIDEO",
+      minHandDetectionConfidence:0.5, minTrackingConfidence:0.5});
+  }catch(e){
+    $msg.className="err"; $msg.textContent="Hand tracking failed to load: "+e.message;
+    return;
+  }
+  try{ NAME=(await (await fetch("/config")).json()).name||"Lugalay"; }catch(e){}
+  await loadBoard();
+  $boot.classList.add("gone");
+  requestAnimationFrame(loop);
+}
+document.getElementById("go").onclick=boot;
+
+/* ---------- geometry ---------- */
+const px=c=>[c.x*W, c.y*H, c.w*W, c.h*H];
+function hit(x,y){
+  for(let i=cards.length-1;i>=0;i--){
+    const [cx,cy,cw,ch]=px(cards[i]);
+    if(x>=cx&&x<=cx+cw&&y>=cy&&y<=cy+ch) return cards[i];
+  }
+  return null;
+}
+
+/* ---------- draw ---------- */
+function drawCard(c,glow){
+  const [x,y,w,h]=px(c), r=10;
+  ctx.save();
+  ctx.shadowBlur=glow?46:20;
+  ctx.shadowColor=glow?c.tint||"#39d0d8":"rgba(0,0,0,.7)";
+  ctx.beginPath(); ctx.roundRect(x,y,w,h,r);
+  ctx.fillStyle="rgba(8,14,18,.90)"; ctx.fill();
+  ctx.shadowBlur=0;
+  ctx.strokeStyle=(c.tint||"#39d0d8")+(glow?"":"66");
+  ctx.lineWidth=glow?2:1; ctx.stroke();
+  ctx.clip();
+  if(c.kind==="image"&&c.img&&c.img.complete&&c.img.naturalWidth){
+    const s=Math.min(w/c.img.naturalWidth,h/c.img.naturalHeight);
+    const iw=c.img.naturalWidth*s, ih=c.img.naturalHeight*s;
+    ctx.drawImage(c.img,x+(w-iw)/2,y+(h-ih)/2,iw,ih);
+  }else{
+    ctx.fillStyle="#cfe4ea";
+    const fs=Math.max(12,Math.min(17,w*0.075));
+    ctx.font=`${fs}px "SF Mono",ui-monospace,Menlo,monospace`;
+    ctx.textBaseline="top";
+    let ty=y+16;
+    if(c.title){ ctx.fillStyle=c.tint||"#39d0d8";
+      ctx.font=`600 ${fs*0.8}px "SF Mono",ui-monospace,Menlo,monospace`;
+      ctx.fillText(c.title.slice(0,28),x+14,ty); ty+=fs*1.6;
+      ctx.fillStyle="#cfe4ea";
+      ctx.font=`${fs}px "SF Mono",ui-monospace,Menlo,monospace`; }
+    // wrap
+    const words=(c.text||"").split(/\s+/); let line="";
+    for(const wd of words){
+      const t=line?line+" "+wd:wd;
+      if(ctx.measureText(t).width>w-28){ ctx.fillText(line,x+14,ty); ty+=fs*1.45; line=wd; }
+      else line=t;
+      if(ty>y+h-fs) break;
+    }
+    if(ty<=y+h-fs) ctx.fillText(line,x+14,ty);
+  }
+  ctx.restore();
+  if(c.held>0){ // delete progress ring
+    const [cx,cy,cw]=px(c);
+    ctx.beginPath(); ctx.arc(cx+cw-16,cy+16,9,-Math.PI/2,-Math.PI/2+c.held*Math.PI*2);
+    ctx.strokeStyle="#e2604a"; ctx.lineWidth=3; ctx.stroke();
+  }
+}
+const BONES=[[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],
+  [11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+function drawHand(h){
+  if(!h.lm) return;
+  const P=h.lm.map(l=>[(1-l.x)*W, l.y*H]);
+  ctx.strokeStyle="rgba(57,208,216,.30)"; ctx.lineWidth=1.6;
+  for(const [a,b] of BONES){ ctx.beginPath(); ctx.moveTo(...P[a]); ctx.lineTo(...P[b]); ctx.stroke(); }
+  for(const p of P){ ctx.beginPath(); ctx.arc(p[0],p[1],2.2,0,7);
+    ctx.fillStyle="rgba(57,208,216,.55)"; ctx.fill(); }
+  // the pinch cursor
+  const grabbing=!!h.grab;
+  ctx.beginPath(); ctx.arc(h.x,h.y,grabbing?15:10,0,7);
+  ctx.strokeStyle=grabbing?"#52e39f":"#39d0d8"; ctx.lineWidth=2;
+  ctx.shadowBlur=grabbing?26:14; ctx.shadowColor=ctx.strokeStyle; ctx.stroke();
+  ctx.shadowBlur=0;
+  ctx.beginPath(); ctx.arc(h.x,h.y,2.5,0,7); ctx.fillStyle=ctx.strokeStyle; ctx.fill();
+}
+
+/* ---------- grab / drag / delete, shared by hands and mouse ---------- */
+function applyPinch(h, pinching){
+  if(pinching && !h.grab){
+    const c=hit(h.x,h.y);
+    if(c){
+      h.grab=c; c.grabbed=true; c.held=0; h.holdStart=performance.now();
+      const [cx,cy]=px(c); h.dx=h.x-cx; h.dy=h.y-cy;
+      h.ox=h.x; h.oy=h.y;
+      cards.splice(cards.indexOf(c),1); cards.push(c);   // raise
+    }
+  }else if(pinching && h.grab){
+    const c=h.grab;
+    c.x=Math.max(0,Math.min(1-c.w,(h.x-h.dx)/W));
+    c.y=Math.max(0,Math.min(1-c.h,(h.y-h.dy)/H));
+    dirty=true;
+    // holding still over a card for a second deletes it
+    if(Math.hypot(h.x-h.ox, h.y-h.oy)>6){ h.holdStart=performance.now(); h.ox=h.x; h.oy=h.y; }
+    c.held=Math.min(1,(performance.now()-h.holdStart)/1000);
+    if(c.held>=1){ cards.splice(cards.indexOf(c),1); dirty=true; h.grab=null; }
+  }else if(!pinching && h.grab){
+    h.grab.grabbed=false; h.grab.held=0; h.grab=null; dirty=true;
+  }
+}
+
+/* ---------- loop ---------- */
+let lastT=-1;
+function loop(){
+  requestAnimationFrame(loop);
+  ctx.clearRect(0,0,W,H);
+
+  if(mouseMode){
+    const h=hands[0];
+    if(h.on) applyPinch(h, !!h.mouseDown);
+  }else if(landmarker && cam.readyState>=2 && cam.currentTime!==lastT){
+    lastT=cam.currentTime;
+    const res=landmarker.detectForVideo(cam, performance.now());
+    const found=res.landmarks||[];
+    for(let i=0;i<hands.length;i++){
+      const h=hands[i], lm=found[i];
+      if(!lm){ h.on=false; h.lm=null; if(h.grab){ h.grab.grabbed=false; h.grab=null; } continue; }
+      h.on=true; h.lm=lm;
+      const thumb=lm[4], index=lm[8];
+      // scale pinch threshold by hand size so distance from camera stops mattering
+      const span=Math.hypot(lm[0].x-lm[9].x, lm[0].y-lm[9].y)||0.1;
+      const d=Math.hypot(thumb.x-index.x, thumb.y-index.y)/span;
+      const pinching=d<0.42;
+      h.x=(1-(thumb.x+index.x)/2)*W; h.y=((thumb.y+index.y)/2)*H;
+
+      applyPinch(h, pinching);
+    }
+  }
+
+  for(const c of cards) drawCard(c, !!c.grabbed);
+  for(const h of hands) if(h.on) drawHand(h);
+  $count.textContent=cards.length+(cards.length===1?" card":" cards");
+}
+</script>
+</body>
+</html>

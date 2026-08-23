@@ -1,0 +1,116 @@
+#!/usr/bin/env python3
+"""Lugalay's hands: a board you move with your bare hands through the webcam.
+
+Serves the board and persists it, so what you leave on the glass is still
+there tomorrow. Everything (model + wasm) is vendored — no internet needed.
+
+    python3 server.py [--no-open]
+"""
+import errno, json, mimetypes, os, sys, threading, webbrowser
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+AGENT = os.path.dirname(HERE)
+sys.path.insert(0, AGENT)
+import bus  # noqa: E402
+
+CFG = bus.config()
+PORT = int(CFG.get("hands_port", 7318))
+BOARD = os.path.join(HERE, "state", "board.json")
+LOCK = threading.Lock()
+
+
+def load_board():
+    try:
+        with open(BOARD) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {"cards": []}
+
+
+def save_board(d):
+    os.makedirs(os.path.dirname(BOARD), exist_ok=True)
+    tmp = BOARD + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(d, f, indent=2)
+    os.replace(tmp, BOARD)
+
+
+class Handler(BaseHTTPRequestHandler):
+    def _send(self, code, body, ctype="application/json"):
+        body = body.encode() if isinstance(body, str) else body
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        path = self.path.split("?")[0]
+        if path == "/board":
+            with LOCK:
+                return self._send(200, json.dumps(load_board()))
+        if path == "/state":
+            return self._send(200, json.dumps(bus.read()))
+        if path == "/config":
+            return self._send(200, json.dumps({"name": CFG.get("name", "Agent")}))
+        if path in ("/", "/index.html"):
+            with open(os.path.join(HERE, "index.html"), "rb") as f:
+                return self._send(200, f.read(), "text/html; charset=utf-8")
+        if path.startswith("/vendor/"):
+            rel = os.path.normpath(path[len("/vendor/"):]).lstrip("./")
+            full = os.path.join(HERE, "vendor", rel)
+            # never serve outside vendor/
+            if not os.path.abspath(full).startswith(os.path.join(HERE, "vendor")):
+                return self._send(403, json.dumps({"error": "forbidden"}))
+            if os.path.isfile(full):
+                ctype = mimetypes.guess_type(full)[0] or "application/octet-stream"
+                if full.endswith(".wasm"):
+                    ctype = "application/wasm"
+                elif full.endswith(".mjs"):
+                    ctype = "text/javascript"
+                with open(full, "rb") as f:
+                    return self._send(200, f.read(), ctype)
+        self._send(404, json.dumps({"error": "not found"}))
+
+    def do_POST(self):
+        if self.path.split("?")[0] != "/board":
+            return self._send(404, json.dumps({"error": "not found"}))
+        n = int(self.headers.get("Content-Length", 0))
+        try:
+            d = json.loads(self.rfile.read(n))
+            assert isinstance(d.get("cards"), list)
+        except (ValueError, AssertionError):
+            return self._send(400, json.dumps({"error": "bad board"}))
+        with LOCK:
+            save_board(d)
+        self._send(200, json.dumps({"ok": True, "cards": len(d["cards"])}))
+
+    def log_message(self, *a):
+        pass
+
+
+def main():
+    url = f"http://127.0.0.1:{PORT}/"
+    if not os.path.exists(BOARD):
+        save_board({"cards": []})
+    try:
+        srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    except OSError as e:
+        if e.errno == errno.EADDRINUSE:
+            print(f"hands:  already running on {url} — reusing it", flush=True)
+            return 0
+        raise
+    print(f"hands: {url}  (open in a browser when you want the board)", flush=True)
+    if "--no-open" not in sys.argv:
+        threading.Timer(0.6, lambda: webbrowser.open(url)).start()
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main() or 0)

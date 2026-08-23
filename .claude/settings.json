@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(**)",
+      "Edit(memory/**)",
+      "Write(memory/**)",
+      "Edit(agent/config.json)",
+      "Bash(python3 agent/hands/present.py:*)",
+      "Bash(./agent/voice/run.sh --check)"
+    ],
+    "deny": [
+      "Bash(rm:*)",
+      "Bash(sudo:*)",
+      "Bash(git push:*)",
+      "Bash(git commit:*)",
+      "Read(./.env)",
+      "Read(~/.ssh/**)",
+      "Read(~/Keys/**)",
+      "Read(~/.claude/.credentials.json)"
+    ]
+  }
+}

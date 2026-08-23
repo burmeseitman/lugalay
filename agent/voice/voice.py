@@ -1,0 +1,1107 @@
+#!/usr/bin/env python3
+"""Lugalay's voice: talk, and get an answer out loud.
+
+Hands-free by default — it calibrates the room, waits for speech, and replies
+when you stop. Set mic.mode to "ptt" in config.json to hold a key instead.
+
+    mic  ──▶ faster-whisper ──▶ claude -p ──▶ Kokoro ──▶ speakers
+                    │                │            │
+                    └──── agent/bus/state.json ───┘   (the face reads this)
+
+    ./run.sh                 normal voice session
+    ./run.sh --text "hi"     skip the mic, test brain + speech
+    ./run.sh --say "hi"      skip the brain, test speech only
+    ./run.sh --mock-brain    echo instead of calling claude (offline testing)
+    ./run.sh --check         verify every dependency and exit
+"""
+import argparse, collections, ctypes, ctypes.util, json, os, queue, re, subprocess, sys, threading, time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+AGENT = os.path.dirname(HERE)
+sys.path.insert(0, AGENT)
+import bus  # noqa: E402
+
+# bus decides where things live: alongside the code in a checkout, in the
+# user's own directory when this is running from a packaged app.
+HOME = bus.HOME
+CFG = bus.config()
+CONFIG_PATH = bus.CONFIG
+MODELS = bus.MODELS
+
+C = {"dim": "\033[2m", "cy": "\033[36m", "gr": "\033[32m", "am": "\033[33m",
+     "rd": "\033[31m", "b": "\033[1m", "x": "\033[0m"}
+
+
+def log(tag, msg, colour="dim"):
+    print(f"{C[colour]}{tag:>9}{C['x']}  {msg}", flush=True)
+
+
+# ─────────────────────────────── the brain ───────────────────────────────
+class Brain:
+    """Claude Code, headless, rooted in the agent's home so it inherits
+    CLAUDE.md, the memory vault, and every tool the person already has."""
+
+    LANG = {
+        "my": ("Reply in Burmese (မြန်မာဘာသာ). Keep code, commands, error "
+               "messages, file paths and technical terms with no natural "
+               "Burmese equivalent in English, inside the Burmese sentence. "
+               "Write natural spoken Burmese, not formal written register."),
+        "en": "Reply in English.",
+    }
+
+    def __init__(self, cfg, mock=False, lang="my"):
+        self.cfg = cfg
+        self.mock = mock
+        self.lang = lang
+        self.session_id = None
+        self.history = []          # only used by the local model
+
+    @staticmethod
+    def _env():
+        """A spawned claude must not think it is a nested agent run."""
+        env = os.environ.copy()
+        for k in ("CLAUDE_CODE_ENTRYPOINT", "CLAUDE_AGENT_SDK_VERSION",
+                  "CLAUDE_CODE_OAUTH_SCOPES", "CLAUDECODE"):
+            env.pop(k, None)
+        return env
+
+    # ── local fallback: Ollama ────────────────────────────────────────
+    def _ollama_system(self, lang):
+        """A local model has no tools, so who Lugalay is has to be handed to
+        it directly instead of being read off disk."""
+        parts = [self.LANG.get(lang or self.lang, self.LANG["my"])]
+        cfg = bus.config()
+        parts.append(f"You are {cfg.get('name', 'the assistant')}, "
+                     f"{cfg.get('user', 'the user')}'s personal assistant. Warm "
+                     "and direct, like a sharp friend who happens to be a good "
+                     "engineer. This is a SPOKEN conversation: answer in two or "
+                     "three sentences of plain prose. No markdown, no lists, no "
+                     "code blocks, no URLs — they sound like noise read aloud.")
+        # the vault is the memory; without tools, hand over the part that matters
+        try:
+            with open(os.path.join(HOME, "memory", "profile.md")) as f:
+                parts.append("What you know about them:\n" + f.read()[:1600])
+        except OSError:
+            pass
+        return "\n\n".join(parts)
+
+    def _ollama_stream(self, text, lang=None):
+        """Yield (piece, is_first) from a local Ollama model."""
+        import urllib.request
+        o = self.cfg.get("ollama", {})
+        url = o.get("url", "http://127.0.0.1:11434") + "/api/chat"
+        self.history.append({"role": "user", "content": text})
+        payload = {
+            "model": o.get("model", "qwen3:8b"),
+            "messages": [{"role": "system", "content": self._ollama_system(lang)}]
+                        + self.history[-8:],
+            "stream": True,
+            # qwen3 and friends are reasoning models: left alone they spend the
+            # whole token budget inside a <think> block and return empty
+            # content. Nobody wants to wait through silent deliberation for a
+            # two-sentence spoken answer.
+            "think": bool(o.get("think", False)),
+            "options": {"temperature": 0.7,
+                        "num_predict": int(o.get("max_tokens", 220))},
+        }
+        req = urllib.request.Request(
+            url, data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"}, method="POST")
+
+        buf, sent_first, full = "", False, ""
+        with urllib.request.urlopen(req, timeout=self.cfg.get("timeout_seconds", 180)) as r:
+            for raw in r:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    d = json.loads(raw)
+                except ValueError:
+                    continue
+                piece = (d.get("message") or {}).get("content", "")
+                if piece:
+                    buf += piece
+                    full += piece
+                    if not sent_first:
+                        m = SENT_END.search(buf)
+                        if m and m.end() >= 12:
+                            head, buf = buf[:m.end()].strip(), buf[m.end():]
+                            sent_first = True
+                            yield head, True
+                if d.get("done"):
+                    break
+        rest = buf.strip()
+        if rest:
+            yield rest, not sent_first
+        elif not sent_first:
+            yield "I do not have anything to say to that.", True
+        self.history.append({"role": "assistant", "content": full.strip()})
+
+    @staticmethod
+    def ollama_up(url="http://127.0.0.1:11434"):
+        import urllib.request
+        try:
+            with urllib.request.urlopen(url + "/api/tags", timeout=2):
+                return True
+        except Exception:
+            return False
+
+    def stream(self, text, lang=None):
+        """Yield the reply in pieces as it is generated.
+
+        Waiting for the whole reply before synthesising anything meant the
+        brain's generation time and the speech time were strictly additive.
+        Measured: first token lands at ~2.0s but the full reply only at ~4.5s,
+        so speaking the opening sentence early hides most of that.
+
+        Yields (piece, is_first). The first piece is the opening sentence, sent
+        the moment it is complete; the rest arrives as one block so the tail of
+        the answer still sounds continuous.
+        """
+        if self.mock:
+            time.sleep(0.4)
+            yield f"You said: {text}", True
+            return
+
+        engine = self.cfg.get("engine", "claude")
+        if engine == "ollama":
+            yield from self._ollama_stream(text, lang)
+            return
+
+        cmd = self._cmd(text, lang, streaming=True)
+        try:
+            proc = subprocess.Popen(cmd, cwd=HOME, env=self._env(),
+                                    stdout=subprocess.PIPE,
+                                    stderr=subprocess.DEVNULL, text=True)
+        except FileNotFoundError:
+            yield "I cannot find the claude command, so I have no brain right now.", True
+            return
+
+        buf, sent_first, err = "", False, None
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            kind = d.get("type")
+            if kind == "stream_event":
+                ev = d.get("event", {})
+                if ev.get("type") == "content_block_delta":
+                    buf += ev.get("delta", {}).get("text", "") or ""
+                    if not sent_first:
+                        m = SENT_END.search(buf)
+                        # only break early on a sentence long enough to be worth
+                        # speaking; "ok." alone would just add a seam
+                        if m and m.end() >= 12:
+                            head, buf = buf[:m.end()].strip(), buf[m.end():]
+                            sent_first = True
+                            yield head, True
+            elif kind == "result":
+                if d.get("session_id"):
+                    self.session_id = d["session_id"]
+                if d.get("is_error"):
+                    err = (d.get("result") or "").strip()
+        proc.wait()
+
+        if err:
+            if (self.cfg.get("engine") == "auto" and not sent_first
+                    and self.ollama_up(self.cfg.get("ollama", {})
+                                       .get("url", "http://127.0.0.1:11434"))):
+                log("brain", f"{C['am']}claude failed ({err}); "
+                             f"falling back to the local model{C['x']}", "am")
+                yield from self._ollama_stream(text, lang)
+                return
+            yield f"My brain refused that one. It said: {err}", not sent_first
+            return
+        rest = buf.strip()
+        if rest:
+            yield rest, not sent_first
+        elif not sent_first:
+            yield "I do not have anything to say to that.", True
+
+    def ask(self, text, lang=None):
+        if self.mock:
+            time.sleep(0.4)
+            return f"You said: {text}"
+
+        cmd = self._cmd(text, lang)
+        try:
+            p = subprocess.run(cmd, cwd=HOME, env=self._env(), capture_output=True,
+                               text=True, timeout=self.cfg.get("timeout_seconds", 180))
+        except subprocess.TimeoutExpired:
+            return "Sorry, that took too long and I gave up on it."
+        except FileNotFoundError:
+            return "I cannot find the claude command, so I have no brain right now."
+        return self._parse(p.stdout, p.stderr)
+
+    def _cmd(self, text, lang=None, streaming=False):
+        cmd = [self.cfg.get("cmd", "claude"), "-p", text,
+               "--output-format", "stream-json" if streaming else "json",
+               # headless runs ignore project settings unless asked; without
+               # this the permission allowlist in .claude/settings.json is
+               # invisible and Lugalay cannot even write its own memory
+               "--setting-sources", "user,project,local",
+               "--append-system-prompt",
+               # CLAUDE.md carries the same rules, but this flag lands later and
+               # wins — leaving language out of it made the reply language drift
+               # to whatever the question was asked in.
+               self.LANG.get(lang or self.lang, self.LANG["my"]) + " "
+               "This is a SPOKEN conversation. Answer in two or three sentences of "
+               "plain prose. No markdown, no lists, no code blocks, no URLs — every "
+               "one of those sounds like noise when read aloud. If the answer truly "
+               "needs code or a long list, write it to a file and say where you put it."]
+        if streaming:
+            cmd += ["--include-partial-messages", "--verbose"]
+
+        # Latency work, measured: every spawn re-reads the whole context, and
+        # loading MCP servers plus the skill catalogue on each turn cost about
+        # 1.5s of the wait before Lugalay says anything. None of it is used in
+        # a spoken exchange.
+        if self.cfg.get("fast", True):
+            cmd += ["--strict-mcp-config", "--disable-slash-commands"]
+            effort = self.cfg.get("effort", "low")
+            if effort:
+                cmd += ["--effort", effort]
+
+        if self.cfg.get("permission_mode") == "auto":
+            cmd += ["--permission-mode", "bypassPermissions"]
+        if self.session_id and self.cfg.get("continue_session", True):
+            cmd += ["--resume", self.session_id]
+
+        return cmd
+
+    def _parse(self, stdout, stderr=""):
+        try:
+            d = json.loads(stdout)
+        except ValueError:
+            err = (stderr or stdout or "no output").strip().splitlines()
+            log("brain", f"{C['rd']}unparseable output: {err[:1]}{C['x']}", "rd")
+            return "Something went wrong reaching my brain."
+        if d.get("session_id"):
+            self.session_id = d["session_id"]
+        result = (d.get("result") or "").strip()
+        if d.get("is_error"):
+            log("brain", f"{C['rd']}error: {result}{C['x']}", "rd")
+            return f"My brain refused that one. It said: {result}"
+        return result or "I do not have anything to say to that."
+
+
+# ──────────────────────────────── the ears ───────────────────────────────
+class Ears:
+    def __init__(self, cfg):
+        import sounddevice as sd
+        self.sd = sd
+        self.rate = int(cfg["mic"].get("samplerate", 16000))
+        self.max_s = int(cfg["mic"].get("max_seconds", 30))
+        self.device = self._resolve(cfg["mic"].get("device"))
+        self.frames, self.stream, self.level = [], None, 0.0
+
+    @staticmethod
+    def _resolve(want):
+        """None means the system default. An int is a device index. A string
+        matches on name, so 'MacBook' survives the device list reordering."""
+        if want is None:
+            return None
+        import sounddevice as sd
+        if isinstance(want, int):
+            return want
+        for i, d in enumerate(sd.query_devices()):
+            if d["max_input_channels"] > 0 and want.lower() in d["name"].lower():
+                return i
+        log("mic", f"{C['am']}no input device matching {want!r}; "
+                   f"using the system default{C['x']}", "am")
+        return None
+
+    def _cb(self, indata, frames, t, status):
+        import numpy as np
+        self.frames.append(indata.copy())
+        rms = float(np.sqrt(np.mean(np.square(indata))))
+        self.level = min(1.0, rms * 9)
+
+    def start(self):
+        self.frames, self.level = [], 0.0
+        self.stream = self.sd.InputStream(samplerate=self.rate, channels=1,
+                                          dtype="float32", callback=self._cb,
+                                          blocksize=1024, device=self.device)
+        self.stream.start()
+
+    def stop(self):
+        import numpy as np
+        if not self.stream:
+            return np.zeros(0, dtype="float32")
+        self.stream.stop(); self.stream.close(); self.stream = None
+        if not self.frames:
+            return np.zeros(0, dtype="float32")
+        audio = np.concatenate(self.frames, axis=0).flatten()
+        return audio[: self.rate * self.max_s]
+
+
+class OpenMic:
+    """Hands-free listening. No key: talk when you feel like it.
+
+    An adaptive energy gate decides when speech starts and stops, and Silero
+    VAD (already bundled with faster-whisper) vets the captured utterance so
+    a door slam or a cough never reaches the brain.
+
+    The microphone is muted while Lugalay is talking. Without that it hears
+    its own voice through the speakers and answers itself forever.
+    """
+
+    def __init__(self, cfg, events):
+        import sounddevice as sd
+        self.sd = sd
+        m = cfg["mic"]
+        self.rate = int(m.get("samplerate", 16000))
+        self.max_s = int(m.get("max_seconds", 30))
+        self.device = Ears._resolve(m.get("device"))
+        self.start_ratio = float(m.get("open_sensitivity", 4.0))
+        self.hang_s = float(m.get("open_silence_seconds", 0.9))
+        self.min_s = float(m.get("open_min_seconds", 0.4))
+        self.events = events
+
+        self.block = 512                       # 32 ms at 16 kHz
+        self.pre_roll = int(0.4 * self.rate / self.block)
+        self.noise = 0.004                     # updated continuously
+        self.calibrating = int(1.0 * self.rate / self.block)
+        self.cal = []
+
+        self.ring = collections.deque(maxlen=self.pre_roll)
+        self.buf = []
+        self.speaking = False                  # are WE hearing speech?
+        self.quiet = 0
+        self.loud = 0
+        self.muted = True                      # until the greeting finishes
+        self.level = 0.0
+        self.stream = None
+        self._vad = None
+
+    # ── the gate ──────────────────────────────────────────────────────
+    def _cb(self, indata, frames, t, status):
+        import numpy as np
+        block = indata.copy().flatten()
+        rms = float(np.sqrt(np.mean(np.square(block))))
+        self.level = min(1.0, rms * 9)
+
+        if self.muted:
+            self.ring.clear()
+            return
+
+        if self.calibrating > 0:               # learn the room first
+            self.cal.append(rms)
+            self.calibrating -= 1
+            if self.calibrating == 0:
+                self.cal.sort()
+                self.noise = max(0.0008, self.cal[len(self.cal) // 2])
+                log("mic", f"{C['dim']}room noise {self.noise:.4f} — "
+                           f"listening, just talk{C['x']}")
+            return
+
+        on = max(self.noise * self.start_ratio, 0.006)
+        off = max(self.noise * (self.start_ratio * 0.5), 0.003)
+
+        if not self.speaking:
+            self.ring.append(block)
+            if rms > on:
+                self.loud += 1
+                if self.loud >= 3:             # ~100 ms, not a click
+                    self.speaking = True
+                    self.quiet = 0
+                    self.buf = list(self.ring)  # keep the first syllable
+                    self.ring.clear()
+                    bus.write("listening", "", self.level)
+            else:
+                self.loud = 0
+                # drift with the room while it is quiet
+                self.noise = self.noise * 0.995 + rms * 0.005
+            return
+
+        self.buf.append(block)
+        if rms < off:
+            self.quiet += 1
+        else:
+            self.quiet = 0
+
+        held = len(self.buf) * self.block / self.rate
+        done = self.quiet * self.block / self.rate >= self.hang_s
+        if done or held >= self.max_s:
+            self.speaking = False
+            self.loud = 0
+            audio = np.concatenate(self.buf).astype("float32")
+            self.buf = []
+            if held >= self.min_s:
+                self.muted = True              # stop listening until answered
+                self.events.put(("utterance", audio))
+            else:
+                bus.write("idle")
+
+    # ── Silero vetting, so noise never reaches the brain ──────────────
+    def is_speech(self, audio):
+        import numpy as np
+        try:
+            if self._vad is None:
+                from faster_whisper.vad import get_vad_model
+                self._vad = get_vad_model()
+            n = (len(audio) // 512) * 512
+            if n < 512:
+                return False
+            probs = self._vad(audio[:n].astype("float32"))
+            return float(np.max(probs)) > 0.5
+        except Exception:
+            return True                        # never block on a broken vet
+
+    def start(self):
+        self.stream = self.sd.InputStream(
+            samplerate=self.rate, channels=1, dtype="float32",
+            callback=self._cb, blocksize=self.block, device=self.device)
+        self.stream.start()
+
+    def stop(self):
+        if self.stream:
+            self.stream.stop(); self.stream.close(); self.stream = None
+
+    def listen(self):
+        """Reopen the gate after Lugalay finishes talking."""
+        self.buf = []
+        self.ring.clear()
+        self.speaking = False
+        self.loud = self.quiet = 0
+        self.muted = False
+
+
+class Transcriber:
+    """Speech to text, in Burmese or English, decided per utterance.
+
+    Stock Whisper cannot transcribe Burmese at any size, and the Burmese
+    fine-tune cannot transcribe English — it hears "can you hear me" as
+    Burmese gibberish. So there are two models and a small third one whose
+    only job is to say which language just arrived.
+
+    `whisper base` was chosen for that job because `tiny` mistakes Burmese
+    for Thai; base gets it right at p=0.84 in under two tenths of a second.
+    """
+
+    # Whisper's language id NEVER returns "my" for real Burmese speech.
+    # Measured on a real Burmese speaker: it answered zh p=0.87, and on other
+    # samples th and cy. English, by contrast, it identifies confidently
+    # (p=0.82-0.99). So the only trustworthy question is "was that English?"
+    # — - everything else is Burmese, which is also the default language here.
+    EN_MIN_PROB = 0.5
+
+    def __init__(self, cfg):
+        from faster_whisper import WhisperModel
+        s = cfg["stt"]
+        self.cfg = s
+        self.bilingual = s.get("mode", "single") == "bilingual"
+        self.compute = s.get("compute_type", "int8")
+        self.threads = os.cpu_count() or 4
+        self._WM = WhisperModel
+        self.cache = {}
+
+        if self.bilingual:
+            names = s.get("models", {})
+            self.name_my = names.get("my", "whisper-my-turbo")
+            self.name_en = names.get("en", "small.en")
+            self.en_min = float(s.get("english_min_prob", self.EN_MIN_PROB))
+            # The Burmese model is a local conversion, not something pip or
+            # faster-whisper can fetch, so a fresh install may not have it.
+            # English still works; say so once and carry on.
+            if not os.path.isdir(os.path.join(MODELS, self.name_my)):
+                log("stt", f"{C['am']}no Burmese model at models/{self.name_my} — "
+                           f"English only.{C['x']}", "am")
+                log("", "add it with:  python3 agent/fetch_models.py --burmese")
+                self.bilingual = False
+                self.lang = "en"
+                self.single = self._load(self.name_en)
+                return
+            log("stt", f"loading {self.name_en} + {self.name_my} + language id …")
+            self.lid = self._load(s.get("lid_model", "base"))
+            self._load(self.name_en)
+            self._load(self.name_my)
+        else:
+            log("stt", f"loading {s['model']} …")
+            self.lang = s.get("language") or None
+            self.single = self._load(s["model"])
+
+    def _load(self, name):
+        if name in self.cache:
+            return self.cache[name]
+        local = os.path.join(MODELS, name)
+        path = local if os.path.isdir(local) else name
+        m = self._WM(path, device="cpu", compute_type=self.compute,
+                     download_root=os.path.join(MODELS, "whisper"),
+                     cpu_threads=self.threads)
+        self.cache[name] = m
+        return m
+
+    def __call__(self, audio):
+        """Returns (text, language) — the language drives the reply too."""
+        if audio.size < 4000:          # under a quarter second: a slip, not speech
+            return "", None
+
+        if not self.bilingual:
+            segs, _ = self.single.transcribe(
+                audio, language=self.lang, beam_size=1, vad_filter=True,
+                condition_on_previous_text=False)
+            return " ".join(x.text for x in segs).strip(), self.lang
+
+        try:
+            lang, prob, _ = self.lid.detect_language(audio)
+        except Exception as e:
+            log("stt", f"{C['am']}language id failed ({e}); assuming English{C['x']}", "am")
+            lang, prob = "en", 0.0
+
+        english = lang == "en" and prob >= self.en_min
+        model = self._load(self.name_en if english else self.name_my)
+        forced = "en" if english else "my"
+        log("stt", f"{C['dim']}id said {lang} p={prob:.2f} → "
+                   f"{'English' if english else 'Burmese'} model{C['x']}")
+        segs, _ = model.transcribe(audio, language=forced, beam_size=1,
+                                   vad_filter=True,
+                                   condition_on_previous_text=False)
+        return " ".join(x.text for x in segs).strip(), forced
+
+
+# ──────────────────────────────── the mouth ──────────────────────────────
+SENT = re.compile(r"(?<=[.!?…။၊])\s+|(?<=[။၊])")
+MYANMAR = re.compile(r"[\u1000-\u109F\uAA60-\uAA7F]")
+SENT_END = re.compile(r"[.!?…။]")
+
+
+def is_burmese(text):
+    """Route by script, not by a config flag — a bilingual agent mixes
+    languages inside one answer and each sentence needs its own voice."""
+    return bool(MYANMAR.search(text))
+
+
+class Mouth:
+    """Kokoro, sentence by sentence, so the first words land while the rest
+    is still being synthesised. Falls back to macOS `say` if Kokoro cannot
+    load — a voice that degrades is better than a voice that dies."""
+
+    def __init__(self, cfg):
+        self.cfg = cfg["tts"]
+        self.kokoro = None
+        self.stop_flag = threading.Event()
+        try:
+            from kokoro_onnx import Kokoro
+            m = os.path.join(MODELS, "kokoro-v1.0.onnx")
+            v = os.path.join(MODELS, "voices-v1.0.bin")
+            if not (os.path.exists(m) and os.path.exists(v)):
+                raise FileNotFoundError("kokoro model files missing")
+            log("tts", "loading kokoro …")
+            self.kokoro = Kokoro(m, v)
+        except Exception as e:
+            log("tts", f"{C['am']}kokoro unavailable ({e}); using macOS say{C['x']}", "am")
+
+    # Kokoro is synthesised locally per sentence so the first words start
+    # early. edge-tts is a single network round trip either way, and splitting
+    # it puts an audible gap between every sentence — so Burmese runs go out
+    # whole, however long they are.
+    LIMIT_EN, LIMIT_MY = 220, 4000
+
+    @classmethod
+    def _chunks(cls, text):
+        """Group sentences into speakable runs, but never merge across a
+        change of script — each language has to reach its own voice."""
+        out, buf = [], ""
+        for s in SENT.split(text.replace("\n", " ")):
+            s = s.strip()
+            if not s:
+                continue
+            same_script = buf and (is_burmese(buf) == is_burmese(s))
+            limit = cls.LIMIT_MY if is_burmese(s) else cls.LIMIT_EN
+            if buf and same_script and len(buf) + len(s) < limit:
+                buf = f"{buf} {s}".strip()
+            else:
+                buf and out.append(buf)
+                buf = s
+        buf and out.append(buf)
+        return out or [text]
+
+    def _speak_burmese(self, text, on_level=None):
+        """Kokoro has no Burmese. Microsoft's neural my-MM voices do, and they
+        are free — but they are an online service, so this one path leaves the
+        machine. Everything else in Lugalay stays local."""
+        import asyncio, tempfile
+        import numpy as np, sounddevice as sd, soundfile as sf
+        try:
+            import edge_tts
+        except ImportError:
+            log("tts", f"{C['am']}edge-tts not installed; cannot speak Burmese{C['x']}", "am")
+            return False
+
+        # the face on screen decides who is speaking
+        v = (bus.face().get("voice") or {})
+        voice = v.get("my", self.cfg.get("burmese_voice", "my-MM-ThihaNeural"))
+        rate = v.get("my_rate", self.cfg.get("burmese_rate", "+0%"))
+        pitch = v.get("my_pitch", self.cfg.get("burmese_pitch", "+0Hz"))
+        tmp = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
+        tmp.close()
+        try:
+            async def go():
+                await edge_tts.Communicate(text, voice, rate=rate,
+                                           pitch=pitch).save(tmp.name)
+            asyncio.run(go())
+            audio, rate = sf.read(tmp.name, dtype="float32")
+            if audio.ndim > 1:
+                audio = audio.mean(axis=1)
+        except Exception as e:
+            log("tts", f"{C['am']}Burmese voice unavailable ({e}); "
+                       f"is the network up?{C['x']}", "am")
+            return False
+        finally:
+            os.path.exists(tmp.name) and os.unlink(tmp.name)
+
+        block = 1024
+        with sd.OutputStream(samplerate=rate, channels=1, dtype="float32") as out:
+            for i in range(0, len(audio), block):
+                if self.stop_flag.is_set():
+                    break
+                b = audio[i:i + block].astype("float32")
+                if on_level:
+                    on_level(min(1.0, float(np.sqrt(np.mean(np.square(b)))) * 4))
+                out.write(b.reshape(-1, 1))
+        return True
+
+    def _say_fallback(self, text):
+        """Last resort when Kokoro will not load. Every platform has some way
+        of speaking; none of them sound good."""
+        try:
+            if sys.platform == "darwin":
+                subprocess.run(["say", "-v", self.cfg.get("fallback_voice", "Daniel"),
+                                text], check=False)
+            elif sys.platform == "win32":
+                ps = ("Add-Type -AssemblyName System.Speech; "
+                      "(New-Object System.Speech.Synthesis.SpeechSynthesizer)"
+                      f".Speak(@'\n{text}\n'@)")
+                subprocess.run(["powershell", "-NoProfile", "-Command", ps], check=False)
+            else:
+                subprocess.run(["espeak-ng", text], check=False)
+        except (OSError, subprocess.SubprocessError) as e:
+            log("tts", f"{C['am']}no fallback voice available ({e}){C['x']}", "am")
+
+    def speak(self, text, on_level=None):
+        self.stop_flag.clear()
+        if not text.strip():
+            return
+        if self.kokoro is None and not is_burmese(text):
+            return self._say_fallback(text)
+
+        import numpy as np, sounddevice as sd
+        for chunk in self._chunks(text):
+            if self.stop_flag.is_set():
+                break
+            if is_burmese(chunk):
+                if self._speak_burmese(chunk, on_level):
+                    continue
+                # Burmese failed (offline?) — skip rather than read the
+                # script aloud in an English voice, which is unintelligible
+                continue
+            try:
+                en_voice = (bus.face().get("voice") or {}).get(
+                    "en", self.cfg.get("voice", "bm_lewis"))
+                samples, rate = self.kokoro.create(
+                    chunk, voice=en_voice,
+                    speed=float(self.cfg.get("speed", 1.0)), lang="en-us")
+            except Exception as e:
+                log("tts", f"{C['am']}kokoro failed mid-speech ({e}){C['x']}", "am")
+                return self._say_fallback(text)
+
+            block = 1024
+            with sd.OutputStream(samplerate=rate, channels=1, dtype="float32") as out:
+                for i in range(0, len(samples), block):
+                    if self.stop_flag.is_set():
+                        break
+                    b = samples[i:i + block].astype("float32")
+                    if on_level:
+                        on_level(min(1.0, float(np.sqrt(np.mean(np.square(b)))) * 4))
+                    out.write(b.reshape(-1, 1))
+        on_level and on_level(0.0)
+
+    def interrupt(self):
+        self.stop_flag.set()
+
+
+# ─────────────────────────── push to talk ────────────────────────────────
+class PushToTalk:
+    def __init__(self, cfg, events):
+        from pynput import keyboard
+        self.kb = keyboard
+        self.events = events
+        spec = cfg["mic"].get("key", "<cmd_r>")
+        specs = spec if isinstance(spec, list) else [spec]
+        try:
+            self.keys = set()
+            for one in specs:
+                self.keys.update(keyboard.HotKey.parse(one))
+        except Exception:
+            log("mic", f"{C['am']}unknown key {spec!r}; falling back to right cmd{C['x']}", "am")
+            self.keys = {keyboard.Key.cmd_r}
+        self.spec = spec
+        self.down = False
+        self.saw_any_key = False
+        self.debug = bool(cfg["mic"].get("debug_keys", True))
+        self.noted = 0
+
+    def _match(self, key):
+        if key in self.keys:
+            return True
+        # Key.* enum members carry their vk on .value, not on the member, so
+        # a naive getattr(key,"vk",None) yields None for both sides and makes
+        # every modifier key match the talk key. Compare real vks only.
+        def vk(k):
+            v = getattr(k, "vk", None)
+            if v is None:
+                v = getattr(getattr(k, "value", None), "vk", None)
+            return v
+        mine = {v for v in (vk(k) for k in self.keys) if v is not None}
+        return bool(mine) and vk(key) in mine
+
+    def _note(self, key):
+        """Log which MODIFIER keys arrive, so a wrong talk key is obvious.
+
+        Deliberately never logs character keys — this file would otherwise be
+        a keylogger, and the talk key is always a named key anyway.
+        """
+        if not self.debug or self.noted >= 12:
+            return
+        name = getattr(key, "name", None)
+        if not name:                       # a character key: ignore it entirely
+            return
+        self.noted += 1
+        if self.noted == 1:
+            log("mic", f"{C['dim']}key monitoring is live{C['x']}")
+        if not self._match(key):
+            log("mic", f"{C['am']}saw <{name}> — not your talk key "
+                       f"({self.spec}){C['x']}", "am")
+
+    def on_press(self, key):
+        self.saw_any_key = True
+        self._note(key)
+        if self._match(key) and not self.down:
+            self.down = True
+            self.events.put(("ptt_down", None))
+
+    def on_release(self, key):
+        if self._match(key) and self.down:
+            self.down = False
+            self.events.put(("ptt_up", None))
+
+    @staticmethod
+    def permission_problem():
+        """Ask macOS directly instead of inferring from silence.
+
+        Inferring "blocked" from "no keys pressed yet" cries wolf at anyone who
+        simply reads the greeting before speaking. These two calls are the same
+        checks the OS itself makes, so they are right the first time.
+
+        Returns None when monitoring will work, otherwise a printable reason.
+        """
+        if sys.platform != "darwin":
+            return None
+        try:
+            lib = ctypes.cdll.LoadLibrary(
+                ctypes.util.find_library("ApplicationServices"))
+            lib.AXIsProcessTrusted.restype = ctypes.c_bool
+            if not lib.AXIsProcessTrusted():
+                return "Accessibility"
+        except Exception:
+            pass                       # cannot check — assume fine, do not nag
+        try:
+            import Quartz
+            tap = Quartz.CGEventTapCreate(
+                Quartz.kCGSessionEventTap, Quartz.kCGHeadInsertEventTap,
+                Quartz.kCGEventTapOptionListenOnly,
+                Quartz.CGEventMaskBit(Quartz.kCGEventKeyDown),
+                lambda *a: None, None)
+            if tap is None:
+                return "Input Monitoring"
+            Quartz.CFRelease(tap)
+        except Exception:
+            pass
+        return None
+
+    def run(self):
+        problem = self.permission_problem()
+        if problem:
+            log("mic", f"{C['rd']}macOS is blocking the talk key "
+                       f"({problem} not granted).{C['x']}", "rd")
+            log("", f"Fix: System Settings ▸ Privacy & Security ▸ {problem},")
+            log("", "add the terminal app you launched this from, then quit it")
+            log("", "fully with Cmd-Q and start again. Closing the window is")
+            log("", "not enough — permissions apply when the process starts.")
+        listener = self.kb.Listener(on_press=self.on_press, on_release=self.on_release)
+        listener.daemon = True
+        listener.start()
+        return listener
+
+
+# ──────────────────────────────── the loop ───────────────────────────────
+def check():
+    ok = True
+    print(f"\n{C['b']}Lugalay · dependency check{C['x']}\n")
+    for label, fn in [
+        ("sounddevice", lambda: __import__("sounddevice").query_devices()),
+        ("faster-whisper", lambda: __import__("faster_whisper")),
+        ("kokoro-onnx", lambda: __import__("kokoro_onnx")),
+        ("pynput", lambda: __import__("pynput")),
+        ("edge-tts (Burmese voice)", lambda: __import__("edge_tts")),
+    ]:
+        try:
+            fn(); print(f"  {C['gr']}✓{C['x']} {label}")
+        except Exception as e:
+            ok = False; print(f"  {C['rd']}✗{C['x']} {label}: {e}")
+    for f in ("kokoro-v1.0.onnx", "voices-v1.0.bin"):
+        p = os.path.join(MODELS, f)
+        if os.path.exists(p):
+            print(f"  {C['gr']}✓{C['x']} {f}  ({os.path.getsize(p)//(1024*1024)} MB)")
+        else:
+            ok = False; print(f"  {C['rd']}✗{C['x']} {f} missing")
+    try:
+        import sounddevice as sd
+        ins = [d["name"] for d in sd.query_devices() if d["max_input_channels"] > 0]
+        print(f"  {C['gr']}✓{C['x']} microphones: {', '.join(ins[:3])}")
+    except Exception as e:
+        ok = False; print(f"  {C['rd']}✗{C['x']} microphone: {e}")
+    r = subprocess.run(["claude", "-p", "Reply with exactly: ok",
+                        "--output-format", "json"], cwd=HOME, env=Brain._env(),
+                       capture_output=True, text=True)
+    try:
+        d = json.loads(r.stdout)
+        if d.get("is_error"):
+            ok = False
+            print(f"  {C['rd']}✗{C['x']} brain: {d.get('result')}")
+        else:
+            print(f"  {C['gr']}✓{C['x']} brain: {d.get('result','')[:40]}")
+    except ValueError:
+        ok = False; print(f"  {C['rd']}✗{C['x']} brain: no JSON from claude")
+    print(f"\n{'all good' if ok else 'some pieces need attention'}\n")
+    return 0 if ok else 1
+
+
+def setkey():
+    """Let the key introduce itself, instead of guessing what macOS calls it.
+
+    Left command reports as <cmd> on macOS, right command as <cmd_r>, and which
+    names a given keyboard produces is not worth anyone's afternoon.
+    """
+    from pynput import keyboard
+    problem = PushToTalk.permission_problem()
+    if problem:
+        print(f"\n{C['rd']}macOS is blocking key monitoring ({problem}).{C['x']}")
+        print(f"Grant it under Privacy & Security ▸ {problem}, Cmd-Q the "
+              f"terminal, and try again.\n")
+        return 1
+
+    print(f"\n{C['b']}Pick your talk key{C['x']}\n")
+    print("  Press and hold the key you want to talk with, then let go.")
+    print(f"  {C['dim']}Pick one you never use in shortcuts — right command,")
+    print(f"  right option, or a function key. Avoid plain left command:")
+    print(f"  it is half of every shortcut on the machine.{C['x']}\n")
+
+    picked = {}
+
+    def on_press(k):
+        name = getattr(k, "name", None)
+        if not name:
+            print(f"  {C['am']}that is a character key — pick a modifier or "
+                  f"function key{C['x']}")
+            return
+        picked["spec"] = f"<{name}>"
+        return False                        # stop the listener
+
+    with keyboard.Listener(on_press=on_press) as lis:
+        lis.join()
+
+    spec = picked.get("spec")
+    if not spec:
+        print("  nothing captured.")
+        return 1
+
+    if spec == "<cmd>":
+        print(f"\n  {C['am']}That is LEFT command. Every ⌘-shortcut you press "
+              f"would start recording.{C['x']}")
+        print("  Saving it anyway is a bad idea — run this again and use the "
+              "RIGHT command key,")
+        print("  or right option, or an F-key.\n")
+        return 1
+
+    with open(CONFIG_PATH) as f:
+        cfg = json.load(f)
+    cfg["mic"]["key"] = spec
+    with open(CONFIG_PATH, "w") as f:
+        json.dump(cfg, f, indent=2, ensure_ascii=False)
+    print(f"\n  {C['gr']}talk key set to {spec}{C['x']}")
+    print(f"  saved to {CONFIG_PATH}")
+    print("  restart Lugalay to use it.\n")
+    return 0
+
+
+def main():
+    ap = argparse.ArgumentParser(add_help=True)
+    ap.add_argument("--text", help="send this to the brain instead of listening")
+    ap.add_argument("--say", help="speak this and exit (no brain, no mic)")
+    ap.add_argument("--mock-brain", action="store_true")
+    ap.add_argument("--check", action="store_true")
+    ap.add_argument("--setkey", action="store_true",
+                    help="hold the key you want as the talk key; it is saved")
+    a = ap.parse_args()
+
+    if a.check:
+        return check()
+
+    if a.setkey:
+        return setkey()
+
+    name, user = CFG.get("name", "Agent"), CFG.get("user", "there")
+    mouth = Mouth(CFG)
+
+    def level(v):
+        bus.write("speaking", bus.read().get("text", ""), v)
+
+    if a.say:
+        bus.write("speaking", a.say, 0.5)
+        mouth.speak(a.say, level)
+        bus.write("idle")
+        return 0
+
+    brain = Brain(CFG.get("brain", {}), mock=a.mock_brain,
+                  lang=CFG.get("language", {}).get("reply", "my"))
+
+    if a.text:
+        bus.write("thinking", a.text)
+        log("you", a.text, "cy")
+        reply = brain.ask(a.text)
+        log(name.lower(), reply, "gr")
+        bus.write("speaking", reply, 0.4)
+        mouth.speak(reply, level)
+        bus.write("idle")
+        return 0
+
+    # full session
+    stt = Transcriber(CFG)
+    events = queue.Queue()
+    hands_free = CFG["mic"].get("mode", "ptt") == "open"
+
+    def respond(said, lang=None):
+        """One turn, shared by both microphone modes.
+
+        The reply language follows whatever he just spoke: Burmese in,
+        Burmese out; English in, English out.
+        """
+        log("you", said, "cy")
+        bus.write("thinking", said, 0.0)
+        if not CFG.get("brain", {}).get("stream", True):
+            reply = brain.ask(said, lang=lang)
+            log(name.lower(), reply, "gr")
+            bus.write("speaking", reply, 0.4)
+            mouth.speak(reply, level)
+            bus.write("idle")
+            return
+        # speak the opening sentence while the rest is still being written
+        said_parts = []
+        for piece, first in brain.stream(said, lang=lang):
+            said_parts.append(piece)
+            if first:
+                log(name.lower(), piece, "gr")
+            else:
+                log("", piece, "gr")
+            # show only the piece being spoken, not the whole reply so far:
+            # the caption is clamped to a few lines, and accumulating would
+            # push the newest words out of view exactly as they are said
+            bus.write("speaking", piece, 0.4)
+            mouth.speak(piece, level)
+        bus.write("idle")
+
+    if hands_free:
+        mic = OpenMic(CFG, events)
+        mic.start()
+        threading.Thread(target=_open_meter, args=(mic,), daemon=True).start()
+        print(f"\n{C['b']}{name}{C['x']} {C['dim']}· hands free, just talk "
+              f"· ctrl-c to stop{C['x']}\n")
+    else:
+        ears = Ears(CFG)
+        ptt = PushToTalk(CFG, events)
+        ptt.run()
+        key = CFG["mic"].get("key", "<cmd_r>")
+        print(f"\n{C['b']}{name}{C['x']} {C['dim']}· hold {key} and speak "
+              f"· ctrl-c to stop{C['x']}\n")
+
+    tmpl = CFG.get("greeting") if CFG.get("language", {}).get("reply") == "my" \
+        else CFG.get("greeting_en", CFG.get("greeting", "Hello {user}."))
+    try:
+        greeting = tmpl.format(user=user, name=name)
+    except (KeyError, IndexError):
+        greeting = tmpl
+    bus.write("speaking", greeting, 0.4)
+    log(name.lower(), greeting, "gr")
+    mouth.speak(greeting, level)
+    bus.write("idle")
+    if hands_free:
+        mic.listen()                       # only now, or it hears the greeting
+
+    listening = False
+    try:
+        while True:
+            kind, payload = events.get()
+
+            if kind == "utterance":            # hands-free
+                bus.write("thinking", "", 0.0)
+                if not mic.is_speech(payload):
+                    log("mic", f"{C['dim']}noise, not speech — ignored{C['x']}")
+                    bus.write("idle"); mic.listen(); continue
+                said, lang = stt(payload)
+                if not said:
+                    log("mic", "nothing caught", "am")
+                    bus.write("idle"); mic.listen(); continue
+                respond(said, lang)
+                mic.listen()
+
+            elif kind == "ptt_down":
+                if listening:
+                    continue
+                mouth.interrupt()          # barge-in: talking over me stops me
+                listening = True
+                ears.start()
+                bus.write("listening", "", 0.0)
+                threading.Thread(target=_meter, args=(ears, lambda: listening),
+                                 daemon=True).start()
+                log("mic", "listening …", "cy")
+
+            elif kind == "ptt_up" and listening:
+                listening = False
+                audio = ears.stop()
+                bus.write("thinking", "", 0.0)
+                said, lang = stt(audio)
+                if not said:
+                    log("mic", "nothing caught", "am")
+                    bus.write("idle")
+                    continue
+                respond(said, lang)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        bus.write("idle")
+        print(f"\n{C['dim']}{name} stopped.{C['x']}")
+    return 0
+
+
+def _open_meter(mic):
+    while True:
+        if not mic.muted:
+            bus.write("listening" if mic.speaking else bus.read().get("state", "idle"),
+                      bus.read().get("text", ""), mic.level if mic.speaking else 0.0)
+        time.sleep(0.08)
+
+
+def _meter(ears, still):
+    while still():
+        bus.write("listening", "", ears.level)
+        time.sleep(0.06)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

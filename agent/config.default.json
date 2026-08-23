@@ -1,0 +1,187 @@
+{
+  "name": "Lugalay",
+  "user": "",
+  "greeting": "မင်္ဂလာပါ {user}။ ဒီနေ့ ဘာအစီအစဉ်ရှိလဲ။",
+  "face": "aung",
+  "face_port": 7317,
+  "hands_port": 7318,
+  "mic": {
+    "mode": "open",
+    "key": [
+      "<cmd_r>",
+      "<alt_r>"
+    ],
+    "max_seconds": 30,
+    "samplerate": 16000,
+    "device": null,
+    "_device_note": "null = system default. Or an index/name substring from mictest.py.",
+    "debug_keys": true,
+    "_key_note": "pynput syntax; a list means any of them works. e.g. <cmd_r>, <alt_r>, <f13>",
+    "open_sensitivity": 4.0,
+    "open_silence_seconds": 0.65,
+    "open_min_seconds": 0.4,
+    "_mode_note": "open = hands-free (just talk). ptt = hold a key.",
+    "_silence_note": "how long you must stop talking before it replies. Lower = snappier, but cuts you off mid-pause."
+  },
+  "stt": {
+    "engine": "faster-whisper",
+    "mode": "bilingual",
+    "lid_model": "base",
+    "models": {
+      "my": "whisper-my-turbo",
+      "en": "small.en"
+    },
+    "compute_type": "int8",
+    "_note": "Whisper's language id never returns 'my' for real Burmese (it says zh/th/cy). It identifies English reliably, so the router asks only 'was that English?' and treats everything else as Burmese. Raise english_min_prob to bias further toward Burmese.",
+    "english_min_prob": 0.5,
+    "_models_note": "whisper-my-turbo (809M, ~3.5s) is the default. whisper-my-large (1.5B, ~14-21s) is also converted and gives longer, more coherent Burmese but is 4-6x slower — swap models.my to 'whisper-my-large' to try it."
+  },
+  "tts": {
+    "engine": "auto",
+    "voice": "bm_lewis",
+    "burmese_voice": "my-MM-ThihaNeural",
+    "speed": 1.0,
+    "fallback_voice": "Daniel",
+    "burmese_rate": "+0%",
+    "burmese_pitch": "+0Hz",
+    "_voice_note": "Thiha chosen by ear over Nilar and the slower variants. burmese_rate/-pitch accept edge-tts values like '-10%' / '-4Hz'. Microsoft my-MM is the only free Burmese voice that exists — Kokoro and macOS have none."
+  },
+  "brain": {
+    "cmd": "claude",
+    "permission_mode": "ask",
+    "continue_session": true,
+    "timeout_seconds": 180,
+    "fast": true,
+    "effort": "low",
+    "_fast_note": "fast adds --strict-mcp-config and --disable-slash-commands; measured ~1.5s off every reply. Set false if Lugalay ever needs an MCP server or a skill mid-conversation.",
+    "stream": true,
+    "_stream_note": "speak the first sentence while the rest is still being generated. Measured: first token ~2.0s, full reply ~4.5s, so this hides most of the wait. Set false to go back to one continuous block.",
+    "engine": "auto",
+    "ollama": {
+      "url": "http://127.0.0.1:11434",
+      "model": "qwen3:8b",
+      "max_tokens": 220,
+      "think": false,
+      "_think_note": "qwen3 is a reasoning model; left on, it spends the whole token budget inside <think> and returns empty content."
+    },
+    "_engine_note": "auto = Claude first, qwen3:8b locally if Claude fails (usage limit, offline). claude = Claude only. ollama = local only (free/offline, but NO tools: it cannot read or write the memory vault, run commands, or repair itself). qwen3.6:27b is 17GB and this Mac has 18GB — do not use it, it will swap."
+  },
+  "language": {
+    "reply": "my",
+    "_note": "my = Burmese default, en = English"
+  },
+  "window": {
+    "width": 460,
+    "height": 640,
+    "x": null,
+    "y": null,
+    "frameless": true,
+    "always_on_top": false,
+    "_note": "The window is transparent and frameless so overlay mode (key B) can strip everything but the avatar. In normal mode the page paints its own dark card, so it still looks like a window. Drag anywhere to move it; Cmd-Q quits.",
+    "transparent": true,
+    "background_color": "#04070A",
+    "overlay": false,
+    "_overlay_note": "true starts bare: no card, no bar, no caption, just the avatar. Key B toggles it at runtime."
+  },
+  "faces": [
+    {
+      "id": "aung",
+      "name": "Aung",
+      "gender": "male",
+      "age": 24,
+      "skin": "#d9a279",
+      "shade": "#b8825c",
+      "hair": "#33261f",
+      "style": "short",
+      "shirt": "#2d606c",
+      "beard": false,
+      "wrinkles": false,
+      "voice": {
+        "my": "my-MM-ThihaNeural",
+        "my_rate": "+7%",
+        "my_pitch": "+14Hz",
+        "en": "am_michael"
+      }
+    },
+    {
+      "id": "hnin",
+      "name": "Hnin",
+      "gender": "female",
+      "age": 22,
+      "skin": "#e0ae87",
+      "shade": "#bd8a64",
+      "hair": "#2a1f1b",
+      "style": "long",
+      "shirt": "#7a4f6e",
+      "beard": false,
+      "wrinkles": false,
+      "voice": {
+        "my": "my-MM-NilarNeural",
+        "my_rate": "+8%",
+        "my_pitch": "+16Hz",
+        "en": "af_heart"
+      }
+    },
+    {
+      "id": "zaw",
+      "name": "Zaw",
+      "gender": "male",
+      "age": 42,
+      "skin": "#c9905f",
+      "shade": "#a3703f",
+      "hair": "#241a15",
+      "style": "short",
+      "shirt": "#33526b",
+      "beard": true,
+      "wrinkles": false,
+      "voice": {
+        "my": "my-MM-ThihaNeural",
+        "my_rate": "+0%",
+        "my_pitch": "+0Hz",
+        "en": "bm_lewis"
+      }
+    },
+    {
+      "id": "mya",
+      "name": "Mya",
+      "gender": "female",
+      "age": 40,
+      "skin": "#d7a077",
+      "shade": "#b07f56",
+      "hair": "#33241d",
+      "style": "bun",
+      "shirt": "#6b4a3a",
+      "beard": false,
+      "wrinkles": false,
+      "voice": {
+        "my": "my-MM-NilarNeural",
+        "my_rate": "+0%",
+        "my_pitch": "-3Hz",
+        "en": "bf_emma"
+      }
+    },
+    {
+      "id": "uba",
+      "name": "U Ba",
+      "gender": "male",
+      "age": 68,
+      "skin": "#c59a74",
+      "shade": "#a2795a",
+      "hair": "#b9b3ab",
+      "style": "receding",
+      "shirt": "#4a4f57",
+      "beard": true,
+      "wrinkles": true,
+      "voice": {
+        "my": "my-MM-ThihaNeural",
+        "my_rate": "-14%",
+        "my_pitch": "-9Hz",
+        "en": "bm_george"
+      }
+    }
+  ],
+  "_faces_note": "press 1-5 to switch. The voice follows the face: Burmese has only two neural voices, so age is expressed through rate and pitch.",
+  "greeting_en": "Hello {user}, what are we working on today?",
+  "setup_done": false,
+  "_setup_note": "setup_done false makes the app open its first-run screen instead of the face. The name lives here and only here; CLAUDE.md and memory/profile.md are rendered from agent/templates/ during setup."
+}

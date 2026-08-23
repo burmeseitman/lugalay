@@ -1,0 +1,166 @@
+name: build
+
+# Push a tag to cut a release:  git tag v1.0.0 && git push origin v1.0.0
+# Every push and PR still builds, so a break is caught before tagging.
+on:
+  push:
+    branches: [main, "ci/**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write          # needed to create the release
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false     # one platform breaking must not hide the others
+      matrix:
+        include:
+          - os: macos-14
+            label: macOS (Apple Silicon)
+            artifact: Lugalay-macos-arm64
+          - os: macos-13
+            label: macOS (Intel)
+            artifact: Lugalay-macos-x86_64
+          - os: windows-latest
+            label: Windows
+            artifact: Lugalay-windows-x86_64
+          - os: ubuntu-22.04
+            label: Linux
+            artifact: Lugalay-linux-x86_64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"      # audio wheels lag the newest CPython
+
+      # ---- system libraries the audio and webview stacks need ----
+      - name: Linux system packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            portaudio19-dev libsndfile1 espeak-ng \
+            libgirepository1.0-dev gir1.2-gtk-3.0 gir1.2-webkit2-4.1 \
+            libcairo2-dev pkg-config python3-dev
+
+      - name: macOS system packages
+        if: runner.os == 'macOS'
+        run: brew install portaudio libsndfile
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r agent/voice/requirements.txt
+          pip install pyinstaller
+        shell: bash
+
+      - name: Linux GTK bindings for pywebview
+        if: runner.os == 'Linux'
+        run: pip install pygobject pycairo
+
+      - name: Windows WebView2 bindings for pywebview
+        if: runner.os == 'Windows'
+        run: pip install pythonnet cefpython3 || pip install pythonnet
+
+      # ---- icons: generated, so the repo carries no binaries ----
+      - name: Build icons
+        run: python build/make_icons.py
+        shell: bash
+
+      - name: Sanity check — everything imports and parses
+        run: python build/preflight.py
+        shell: bash
+
+      - name: Build
+        env:
+          LUGALAY_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '0.0.0-dev' }}
+        run: pyinstaller --noconfirm --clean build/lugalay.spec
+        shell: bash
+
+      # ---- package one file per platform ----
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          cd dist
+          # ad-hoc sign so Gatekeeper gives a "damaged app" dialog no earlier
+          # than it must; this is not notarised, and users still need to
+          # right-click > Open the first time
+          codesign --force --deep --sign - Lugalay.app || true
+          hdiutil create -volname Lugalay -srcfolder Lugalay.app \
+            -ov -format UDZO "${{ matrix.artifact }}.dmg"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: Compress-Archive -Path dist/Lugalay/* -DestinationPath "dist/${{ matrix.artifact }}.zip"
+        shell: pwsh
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cd dist
+          tar czf "${{ matrix.artifact }}.tar.gz" Lugalay
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: What are we releasing
+        run: ls -lh artifacts
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
+          body: |
+            ## Install
+
+            | platform | file | first launch |
+            |---|---|---|
+            | macOS | `.dmg` | drag to Applications, then **right-click → Open** (unsigned) |
+            | Windows | `.zip` | unzip, run `Lugalay.exe`; SmartScreen → More info → Run anyway |
+            | Linux | `.tar.gz` | extract, run `./Lugalay` |
+
+            ### Before it can think
+
+            Lugalay's brain is **Claude Code**, which you install separately and
+            log in once:
+
+            ```
+            npm install -g @anthropic-ai/claude-code && claude
+            ```
+
+            Without it the app still runs, listens and draws — it just has
+            nothing to say. A local Ollama model can stand in; see the README.
+
+            ### First run
+
+            The app asks your name, the assistant's name and your language, then
+            downloads the speech models (about 350MB). Burmese speech *input* is
+            an extra opt-in download — see `fetch_models.py --burmese`.
+
+            Microphone permission is required. Denied, capture returns silence
+            rather than an error, which looks exactly like a broken microphone.

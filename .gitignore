@@ -1,0 +1,36 @@
+# ── things that are far too big, or rebuild themselves ──
+agent/voice/.venv/
+agent/voice/models/
+agent/.convert-venv/
+__pycache__/
+*.pyc
+
+# ── generated at runtime ──
+agent/logs/
+agent/bus/state.json
+agent/bus/face.json
+agent/hands/state/
+
+# ── personal: created by setup, belongs to whoever installs this ──
+CLAUDE.md
+memory/
+*.before-setup
+.setup-test-backup/
+old-terminal-shortcuts/
+
+# ── build output ──
+build/
+dist/
+*.spec.bak
+
+# ── macOS ──
+.DS_Store
+
+# personal: seeded from config.default.json on first run
+agent/config.json
+
+# generated at build time
+build/icon.icns
+build/icon.ico
+build/icon.png
+build/*.iconset/
