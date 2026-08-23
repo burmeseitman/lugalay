@@ -28,6 +28,8 @@ sys.stdout = sys.stderr = _log
 print(f"\n=== Lugalay started {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
 
 THREADS = []
+_shut = threading.Lock()
+_done = []
 face_port = 7317
 
 

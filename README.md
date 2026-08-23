@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.svg" alt="Lugalay" width="700"/>
+</p>
+
 # Lugalay
 
 A personal AI assistant that lives on this machine: a **mind**, a **mouth**, a

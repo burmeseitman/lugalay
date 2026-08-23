@@ -17,6 +17,7 @@ memory/
 *.before-setup
 .setup-test-backup/
 old-terminal-shortcuts/
+*.ses
 
 # ── build output (PyInstaller writes these) ──
 /build/

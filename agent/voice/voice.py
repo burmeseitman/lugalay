@@ -14,7 +14,7 @@ when you stop. Set mic.mode to "ptt" in config.json to hold a key instead.
     ./run.sh --mock-brain    echo instead of calling claude (offline testing)
     ./run.sh --check         verify every dependency and exit
 """
-import argparse, collections, ctypes, ctypes.util, json, os, queue, re, subprocess, sys, threading, time
+import argparse, collections, ctypes, ctypes.util, json, os, queue, re, signal, subprocess, sys, threading, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 AGENT = os.path.dirname(HERE)
@@ -982,6 +982,19 @@ def main():
         return 0
 
     # full session
+    # Ensure SIGTERM causes a clean exit. When running inside app.py the
+    # signal mask is inherited as SIG_BLOCK, so unblock first; when running
+    # standalone this is harmless. Converting SIGTERM to KeyboardInterrupt
+    # lets the existing try/except cleanup path do its job.
+    try:
+        signal.pthread_sigmask(signal.SIG_UNBLOCK,
+                               {signal.SIGTERM, signal.SIGINT, signal.SIGHUP})
+    except (AttributeError, OSError):
+        pass  # not available on every platform
+    def _term_handler(sig, frame):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, _term_handler)
+
     stt = Transcriber(CFG)
     events = queue.Queue()
     hands_free = CFG["mic"].get("mode", "ptt") == "open"
