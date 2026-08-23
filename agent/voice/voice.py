@@ -42,10 +42,13 @@ class Brain:
     CLAUDE.md, the memory vault, and every tool the person already has."""
 
     LANG = {
-        "my": ("Reply in Burmese (မြန်မာဘာသာ). Keep code, commands, error "
-               "messages, file paths and technical terms with no natural "
-               "Burmese equivalent in English, inside the Burmese sentence. "
-               "Write natural spoken Burmese, not formal written register."),
+        "my": ("Reply in natural, warm spoken Burmese (မြန်မာဘာသာ). "
+               "Speak like a friendly, intelligent human sitting in the room: "
+               "use everyday conversational Burmese (e.g. ပါတယ်၊ ဟုတ်ကဲ့ပါ၊ ရပါတယ်၊ နော်) "
+               "rather than stiff formal written register (avoid ဖြစ်ပါသည်၊ ဆောင်ရွက်ပါမည်). "
+               "Keep sentences relatively short (2-3 concise sentences) and use natural "
+               "Burmese punctuation (၊ and ။) so speech rhythm sounds lively and human. "
+               "Keep English technical terms or brand names in clean Latin characters inside the sentence."),
         "en": "Reply in English.",
     }
 
@@ -87,11 +90,11 @@ class Brain:
         parts = [self.LANG.get(lang or self.lang, self.LANG["my"])]
         cfg = bus.config()
         parts.append(f"You are {cfg.get('name', 'the assistant')}, "
-                     f"{cfg.get('user', 'the user')}'s personal assistant. Warm "
-                     "and direct, like a sharp friend who happens to be a good "
-                     "engineer. This is a SPOKEN conversation: answer in two or "
-                     "three sentences of plain prose. No markdown, no lists, no "
-                     "code blocks, no URLs — they sound like noise read aloud.")
+                     f"{cfg.get('user', 'the user')}'s personal assistant. Warm, "
+                     "friendly, and direct. This is a REAL-TIME SPOKEN conversation: "
+                     "answer in two or three short sentences of natural conversational "
+                     "prose. Never output markdown formatting, lists, bullet points, "
+                     "code blocks, or URLs.")
         try:
             with open(os.path.join(HOME, "memory", "profile.md")) as f:
                 parts.append("What you know about them:\n" + f.read()[:1600])
@@ -780,6 +783,28 @@ def is_burmese(text):
     return bool(MYANMAR.search(text))
 
 
+def format_burmese_for_speech(text):
+    """Format Burmese text specifically for natural neural TTS prosody.
+    Adds breathing spaces around English loanwords, inserts natural pauses,
+    and ensures proper sentence-ending cadence."""
+    if not text:
+        return ""
+    # 1. Add breathing spaces around Latin/English words inside Burmese text
+    text = re.sub(r"([a-zA-Z0-9]+)([\u1000-\u109F\uAA60-\uAA7F])", r"\1 \2", text)
+    text = re.sub(r"([\u1000-\u109F\uAA60-\uAA7F])([a-zA-Z0-9]+)", r"\1 \2", text)
+    # 2. Convert English periods/commas to Myanmar punctuation when preceded by Burmese
+    text = re.sub(r"([\u1000-\u109F\uAA60-\uAA7F])\s*\.\s*", r"\1။ ", text)
+    text = re.sub(r"([\u1000-\u109F\uAA60-\uAA7F])\s*,\s*", r"\1၊ ", text)
+    # 3. Ensure sentence ends with Myanmar full stop for natural falling intonation
+    text = text.strip()
+    if text and ('\u1000' <= text[-1] <= '\u109F'):
+        text += "။"
+    # 4. Clean consecutive punctuation
+    text = re.sub(r"([။၊])\1+", r"\1", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
 def clean_spoken_text(text):
     """Clean LLM output so it sounds like natural, human speech when spoken aloud.
     Removes markdown formatting, emojis, asterisks, bullet points, raw code, XML/think tags,
@@ -872,13 +897,18 @@ class Mouth:
             log("tts", f"{C['am']}edge-tts not installed; cannot speak Burmese{C['x']}", "am")
             return False
 
+        # Format Burmese text for optimal prosody, breathing pauses, and clean English boundaries
+        text = format_burmese_for_speech(clean_spoken_text(text))
+        if not text.strip():
+            return True
+
         # the face on screen decides who is speaking
         f = bus.face()
         v = (f.get("voice") or {})
         gender = f.get("gender", "male")
         default_my = "my-MM-NilarNeural" if gender == "female" else "my-MM-ThihaNeural"
         voice = v.get("my", self.cfg.get("burmese_voice", default_my))
-        rate = v.get("my_rate", self.cfg.get("burmese_rate", "+0%"))
+        rate = v.get("my_rate", self.cfg.get("burmese_rate", "-2%"))
         pitch = v.get("my_pitch", self.cfg.get("burmese_pitch", "+0Hz"))
         tmp = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
         tmp.close()
