@@ -95,6 +95,10 @@ def apply(answers):
     cfg.setdefault("language", {})["reply"] = lang
     if face in [f["id"] for f in cfg.get("faces", [])]:
         cfg["face"] = face
+        try:
+            bus.set_face(face)
+        except Exception:
+            pass
     cfg["setup_done"] = True
 
     with open(bus.CONFIG, "w", encoding="utf-8") as f:

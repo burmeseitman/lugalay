@@ -777,8 +777,11 @@ class Mouth:
             return False
 
         # the face on screen decides who is speaking
-        v = (bus.face().get("voice") or {})
-        voice = v.get("my", self.cfg.get("burmese_voice", "my-MM-ThihaNeural"))
+        f = bus.face()
+        v = (f.get("voice") or {})
+        gender = f.get("gender", "male")
+        default_my = "my-MM-NilarNeural" if gender == "female" else "my-MM-ThihaNeural"
+        voice = v.get("my", self.cfg.get("burmese_voice", default_my))
         rate = v.get("my_rate", self.cfg.get("burmese_rate", "+0%"))
         pitch = v.get("my_pitch", self.cfg.get("burmese_pitch", "+0Hz"))
         tmp = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
@@ -810,19 +813,27 @@ class Mouth:
         return True
 
     def _say_fallback(self, text):
-        """Last resort when Kokoro will not load. Every platform has some way
-        of speaking; none of them sound good."""
+        """Last resort when Kokoro will not load. Ensure fallback voice matches
+        the gender and age of the persona."""
+        f = bus.face()
+        gender = f.get("gender", "male")
+        age = f.get("age", 25)
         try:
             if sys.platform == "darwin":
-                subprocess.run(["say", "-v", self.cfg.get("fallback_voice", "Daniel"),
-                                text], check=False)
+                if gender == "female":
+                    voice = "Samantha" if age < 35 else "Karen"
+                else:
+                    voice = "Alex" if age < 55 else "Daniel"
+                subprocess.run(["say", "-v", voice, text], check=False)
             elif sys.platform == "win32":
+                hint = "Female" if gender == "female" else "Male"
                 ps = ("Add-Type -AssemblyName System.Speech; "
-                      "(New-Object System.Speech.Synthesis.SpeechSynthesizer)"
-                      f".Speak(@'\n{text}\n'@)")
+                      "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+                      f"$s.SelectVoiceByHints('{hint}'); "
+                      f"$s.Speak(@'\n{text}\n'@)")
                 subprocess.run(["powershell", "-NoProfile", "-Command", ps], check=False)
             else:
-                subprocess.run(["espeak-ng", text], check=False)
+                subprocess.run(["espeak-ng", "-v", "en+f3" if gender == "female" else "en+m3", text], check=False)
         except (OSError, subprocess.SubprocessError) as e:
             log("tts", f"{C['am']}no fallback voice available ({e}){C['x']}", "am")
 
@@ -844,8 +855,11 @@ class Mouth:
                 # script aloud in an English voice, which is unintelligible
                 continue
             try:
-                en_voice = (bus.face().get("voice") or {}).get(
-                    "en", self.cfg.get("voice", "bm_lewis"))
+                f = bus.face()
+                v = (f.get("voice") or {})
+                gender = f.get("gender", "male")
+                default_en = "af_heart" if gender == "female" else "am_michael"
+                en_voice = v.get("en", default_en)
                 samples, rate = self.kokoro.create(
                     chunk, voice=en_voice,
                     speed=float(self.cfg.get("speed", 1.0)), lang="en-us")
