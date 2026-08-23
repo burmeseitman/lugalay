@@ -885,10 +885,55 @@ class Mouth:
         buf and out.append(buf)
         return out or [text]
 
-    def _speak_burmese(self, text, on_level=None):
-        """Kokoro has no Burmese. Microsoft's neural my-MM voices do, and they
-        are free — but they are an online service, so this one path leaves the
-        machine. Everything else in Lugalay stays local."""
+    def _speak_burmese_google(self, text, on_level=None):
+        """Synthesize Burmese using Google's Free 24kHz Speech Engine (soft, natural tone)."""
+        import io, urllib.request, urllib.parse
+        import numpy as np, sounddevice as sd, soundfile as sf
+        try:
+            sentences = [s.strip() for s in text.replace("\n", " ").split("။") if s.strip()]
+            if not sentences:
+                sentences = [text]
+            all_samples = []
+            sample_rate = 24000
+            for s in sentences:
+                if not s.endswith("။"):
+                    s += "။"
+                params = urllib.parse.urlencode({
+                    "ie": "UTF-8",
+                    "q": s,
+                    "tl": "my",
+                    "client": "tw-ob"
+                })
+                url = f"https://translate.google.com/translate_tts?{params}"
+                headers = {"User-Agent": "Mozilla/5.0"}
+                req = urllib.request.Request(url, headers=headers)
+                with urllib.request.urlopen(req, timeout=6) as resp:
+                    audio, rate = sf.read(io.BytesIO(resp.read()), dtype="float32")
+                    if audio.ndim > 1:
+                        audio = audio.mean(axis=1)
+                    sample_rate = rate
+                    all_samples.append(audio)
+            
+            if not all_samples:
+                return False
+            
+            full_audio = np.concatenate(all_samples)
+            block = 1024
+            with sd.OutputStream(samplerate=sample_rate, channels=1, dtype="float32") as out:
+                for i in range(0, len(full_audio), block):
+                    if self.stop_flag.is_set():
+                        break
+                    b = full_audio[i:i + block].astype("float32")
+                    if on_level:
+                        on_level(min(1.0, float(np.sqrt(np.mean(np.square(b)))) * 4))
+                    out.write(b.reshape(-1, 1))
+            return True
+        except Exception as e:
+            log("tts", f"{C['am']}Google Burmese TTS failed ({e}); falling back to Edge-TTS{C['x']}", "am")
+            return False
+
+    def _speak_burmese_edge(self, text, on_level=None):
+        """Synthesize Burmese using Microsoft's Neural Edge-TTS."""
         import asyncio, tempfile
         import numpy as np, sounddevice as sd, soundfile as sf
         try:
@@ -897,12 +942,6 @@ class Mouth:
             log("tts", f"{C['am']}edge-tts not installed; cannot speak Burmese{C['x']}", "am")
             return False
 
-        # Format Burmese text for optimal prosody, breathing pauses, and clean English boundaries
-        text = format_burmese_for_speech(clean_spoken_text(text))
-        if not text.strip():
-            return True
-
-        # the face on screen decides who is speaking
         f = bus.face()
         v = (f.get("voice") or {})
         gender = f.get("gender", "male")
@@ -921,8 +960,7 @@ class Mouth:
             if audio.ndim > 1:
                 audio = audio.mean(axis=1)
         except Exception as e:
-            log("tts", f"{C['am']}Burmese voice unavailable ({e}); "
-                       f"is the network up?{C['x']}", "am")
+            log("tts", f"{C['am']}Edge-TTS voice unavailable ({e}){C['x']}", "am")
             return False
         finally:
             os.path.exists(tmp.name) and os.unlink(tmp.name)
@@ -937,6 +975,18 @@ class Mouth:
                     on_level(min(1.0, float(np.sqrt(np.mean(np.square(b)))) * 4))
                 out.write(b.reshape(-1, 1))
         return True
+
+    def _speak_burmese(self, text, on_level=None):
+        """Synthesize Burmese using Google Free TTS first, with automatic Edge-TTS fallback."""
+        text = format_burmese_for_speech(clean_spoken_text(text))
+        if not text.strip():
+            return True
+
+        engine = self.cfg.get("burmese_engine", "google")
+        if engine == "google":
+            if self._speak_burmese_google(text, on_level):
+                return True
+        return self._speak_burmese_edge(text, on_level)
 
     def _say_fallback(self, text):
         """Last resort when Kokoro will not load. Ensure fallback voice matches
