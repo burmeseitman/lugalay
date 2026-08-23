@@ -174,6 +174,13 @@ class Brain:
                                     stdout=subprocess.PIPE,
                                     stderr=subprocess.DEVNULL, text=True)
         except FileNotFoundError:
+            if (self.cfg.get("engine") == "auto"
+                    and self.ollama_up(self.cfg.get("ollama", {})
+                                       .get("url", "http://127.0.0.1:11434"))):
+                log("brain", f"{C['am']}claude not installed; "
+                             f"falling back to the local model{C['x']}", "am")
+                yield from self._ollama_stream(text, lang)
+                return
             yield "I cannot find the claude command, so I have no brain right now.", True
             return
 
@@ -234,6 +241,14 @@ class Brain:
         except subprocess.TimeoutExpired:
             return "Sorry, that took too long and I gave up on it."
         except FileNotFoundError:
+            if (self.cfg.get("engine") == "auto"
+                    and self.ollama_up(self.cfg.get("ollama", {})
+                                       .get("url", "http://127.0.0.1:11434"))):
+                log("brain", f"{C['am']}claude not installed; "
+                             f"falling back to the local model{C['x']}", "am")
+                parts = list(self._ollama_stream(text, lang))
+                return " ".join(p for p, _ in parts).strip() or \
+                       "I do not have anything to say to that."
             return "I cannot find the claude command, so I have no brain right now."
         return self._parse(p.stdout, p.stderr)
 
