@@ -609,7 +609,10 @@ class OpenMic:
             self.stream.stop(); self.stream.close(); self.stream = None
 
     def listen(self):
-        """Reopen the gate after Lugalay finishes talking."""
+        """Reopen the gate after Lugalay finishes talking.
+        Includes an acoustic cooldown so the microphone does not catch
+        the tail of the speaker's own echo in hands-free mode."""
+        time.sleep(0.35)
         self.buf = []
         self.ring.clear()
         self.speaking = False
@@ -1347,14 +1350,18 @@ def main():
         """
         log("you", said, "cy")
         bus.write("thinking", said, 0.0)
-        if not CFG.get("brain", {}).get("stream", True):
+        # For Burmese or when streaming is disabled, synthesize the full coherent reply
+        # as a single continuous block to guarantee smooth intonation and prevent phrase repetition
+        is_my = (lang == "my") or is_burmese(said)
+        if not CFG.get("brain", {}).get("stream", True) or is_my:
             reply = brain.ask(said, lang=lang)
             log(name.lower(), reply, "gr")
             bus.write("speaking", reply, 0.4)
             mouth.speak(reply, level)
             bus.write("idle")
             return
-        # speak the opening sentence while the rest is still being written
+
+        # For English: stream sentence-by-sentence with Kokoro
         said_parts = []
         for piece, first in brain.stream(said, lang=lang):
             said_parts.append(piece)
@@ -1362,9 +1369,6 @@ def main():
                 log(name.lower(), piece, "gr")
             else:
                 log("", piece, "gr")
-            # show only the piece being spoken, not the whole reply so far:
-            # the caption is clamped to a few lines, and accumulating would
-            # push the newest words out of view exactly as they are said
             bus.write("speaking", piece, 0.4)
             mouth.speak(piece, level)
         bus.write("idle")
