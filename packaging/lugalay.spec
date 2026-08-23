@@ -34,6 +34,10 @@ for name in ("voice.py", "requirements.txt", "mictest.py", "langtest.py",
     if os.path.exists(src):
         datas.append((src, os.path.join("agent", "voice")))
 
+from PyInstaller.utils.hooks import collect_data_files
+datas += collect_data_files("kokoro_onnx")
+datas += collect_data_files("faster_whisper")
+
 hiddenimports = [
     "webview", "webview.platforms",
     "sounddevice", "soundfile", "numpy",

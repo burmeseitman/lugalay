@@ -982,18 +982,21 @@ def main():
         return 0
 
     # full session
-    # Ensure SIGTERM causes a clean exit. When running inside app.py the
-    # signal mask is inherited as SIG_BLOCK, so unblock first; when running
-    # standalone this is harmless. Converting SIGTERM to KeyboardInterrupt
-    # lets the existing try/except cleanup path do its job.
-    try:
-        signal.pthread_sigmask(signal.SIG_UNBLOCK,
-                               {signal.SIGTERM, signal.SIGINT, signal.SIGHUP})
-    except (AttributeError, OSError):
-        pass  # not available on every platform
-    def _term_handler(sig, frame):
-        raise KeyboardInterrupt
-    signal.signal(signal.SIGTERM, _term_handler)
+    # Ensure SIGTERM causes a clean exit when running standalone in main thread.
+    # When running inside app.py on a worker thread, signal.signal cannot be
+    # called and app.py's own reaper thread handles signals instead.
+    if threading.current_thread() is threading.main_thread():
+        try:
+            signal.pthread_sigmask(signal.SIG_UNBLOCK,
+                                   {signal.SIGTERM, signal.SIGINT, signal.SIGHUP})
+        except (AttributeError, OSError):
+            pass
+        def _term_handler(sig, frame):
+            raise KeyboardInterrupt
+        try:
+            signal.signal(signal.SIGTERM, _term_handler)
+        except (ValueError, AttributeError):
+            pass
 
     stt = Transcriber(CFG)
     events = queue.Queue()
