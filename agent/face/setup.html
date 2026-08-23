@@ -16,8 +16,14 @@
   p.sub{margin:0 0 22px;font-size:13px;line-height:1.6;color:var(--dim)}
   label{display:block;font-size:10px;letter-spacing:.18em;text-transform:uppercase;
         color:var(--dim);margin:16px 0 6px}
-  input,select{width:100%;background:#0b141a;border:1px solid #1e2f38;color:var(--fg);
-    padding:11px 12px;font:inherit;font-size:15px;border-radius:6px;outline:none}
+  input,select{width:100%;height:42px;background:#0b141a;border:1px solid #1e2f38;color:var(--fg);
+    padding:0 12px;font:inherit;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Myanmar Sangam MN",sans-serif;
+    font-size:14px;border-radius:6px;outline:none;box-sizing:border-box;line-height:40px}
+  select{
+    -webkit-appearance:none;-moz-appearance:none;appearance:none;
+    background-image:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="%237d93a1" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>');
+    background-repeat:no-repeat;background-position:right 12px center;padding-right:32px;cursor:pointer
+  }
   input:focus,select:focus{border-color:var(--accent)}
   .row{display:flex;gap:10px}
   .row>*{flex:1}
