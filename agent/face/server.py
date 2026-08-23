@@ -35,6 +35,27 @@ class Handler(BaseHTTPRequestHandler):
                 "faces": bus.faces(),
                 "overlay": bool(CFG.get("window", {}).get("overlay", False)),
             }))
+        if path == "/settings":
+            cfg = bus.config()
+            raw_key = (cfg.get("tts", {}).get("api_key") or "").strip()
+            provider = "Free Edge-TTS"
+            masked = ""
+            if raw_key:
+                if raw_key.startswith("AIzaSy"):
+                    provider = "Google Cloud Neural2"
+                else:
+                    provider = "ElevenLabs Multilingual v2"
+                masked = ("•" * 16) + (raw_key[-4:] if len(raw_key) > 4 else "")
+            return self._send(200, json.dumps({
+                "user": cfg.get("user", ""),
+                "agent": cfg.get("name", "Lugalay"),
+                "language": cfg.get("language", {}).get("reply", "my"),
+                "face": bus.face_id(),
+                "faces": bus.faces(),
+                "has_api_key": bool(raw_key),
+                "api_key_masked": masked,
+                "provider": provider,
+            }))
         if path == "/setup-defaults":
             import setup as setup_mod
             return self._send(200, json.dumps({
@@ -51,7 +72,8 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, json.dumps({"error": "not found"}))
 
     def do_POST(self):
-        if self.path.split("?")[0] == "/setup":
+        path = self.path.split("?")[0]
+        if path == "/setup":
             import setup as setup_mod
             n = int(self.headers.get("Content-Length", 0))
             try:
@@ -61,9 +83,32 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, json.dumps({"error": str(e)}))
             return self._send(200, json.dumps(result, ensure_ascii=False))
 
+        if path == "/settings":
+            n = int(self.headers.get("Content-Length", 0))
+            try:
+                data = json.loads(self.rfile.read(n))
+                cfg = bus.config()
+                if "user" in data and data["user"].strip():
+                    cfg["user"] = data["user"].strip()
+                if "agent" in data and data["agent"].strip():
+                    cfg["name"] = data["agent"].strip()
+                if "language" in data and data["language"]:
+                    cfg.setdefault("language", {})["reply"] = data["language"]
+                if "face" in data and data["face"]:
+                    bus.set_face(data["face"])
+                if "api_key" in data:
+                    new_key = data["api_key"].strip()
+                    if not new_key.startswith("•"):
+                        cfg.setdefault("tts", {})["api_key"] = new_key
+                with open(bus.CONFIG, "w", encoding="utf-8") as f:
+                    json.dump(cfg, f, indent=2, ensure_ascii=False)
+                return self._send(200, json.dumps({"ok": True, "face": bus.face_id()}))
+            except Exception as e:
+                return self._send(400, json.dumps({"error": str(e)}))
+
         # the face is the one place the person can talk back to the agent:
         # picking a persona here also picks the voice it answers in
-        if self.path.split("?")[0] != "/face":
+        if path != "/face":
             return self._send(404, json.dumps({"error": "not found"}))
         n = int(self.headers.get("Content-Length", 0))
         try:

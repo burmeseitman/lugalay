@@ -93,6 +93,10 @@ def apply(answers):
     cfg["user"] = user
     cfg["name"] = agent
     cfg.setdefault("language", {})["reply"] = lang
+    if "api_key" in answers:
+        key = (answers.get("api_key") or "").strip()
+        if key and not key.startswith("•"):
+            cfg.setdefault("tts", {})["api_key"] = key
     if face in [f["id"] for f in cfg.get("faces", [])]:
         cfg["face"] = face
         try:

@@ -51,7 +51,43 @@
   #who{position:fixed;z-index:2;top:14px;left:0;right:0;text-align:center;font-size:10px;
        letter-spacing:.22em;text-transform:uppercase;color:var(--accent,#39d0d8);
        opacity:0;transition:opacity .35s;pointer-events:none}
-  #who.show{opacity:.75}
+  #settings-btn{position:fixed;z-index:10;top:14px;right:16px;cursor:pointer;
+                background:rgba(11,20,26,0.65);border:1px solid rgba(120,160,175,0.22);
+                color:var(--dim);border-radius:8px;padding:5px 9px;font-size:12px;
+                display:flex;align-items:center;gap:6px;backdrop-filter:blur(8px);
+                transition:all .2s ease;letter-spacing:.1em;text-transform:uppercase}
+  #settings-btn:hover{color:var(--accent,#39d0d8);border-color:var(--accent,#39d0d8);
+                      background:rgba(11,20,26,0.9)}
+  #settings-modal{position:fixed;inset:0;z-index:100;background:rgba(4,7,10,0.85);
+                  backdrop-filter:blur(14px);display:flex;align-items:center;
+                  justify-content:center;padding:20px;opacity:0;pointer-events:none;
+                  transition:opacity .25s ease}
+  #settings-modal.open{opacity:1;pointer-events:auto}
+  .modal-card{width:100%;max-width:390px;background:#081015;border:1px solid rgba(120,160,175,0.25);
+              border-radius:12px;padding:24px;box-shadow:0 12px 40px rgba(0,0,0,0.85);
+              color:#dceaf0;font-family:-apple-system,"Helvetica Neue",sans-serif}
+  .modal-card h2{font-size:12px;letter-spacing:.25em;text-transform:uppercase;
+                 color:var(--accent,#39d0d8);margin:0 0 16px;font-weight:700}
+  .modal-card label{display:block;font-size:10px;letter-spacing:.15em;text-transform:uppercase;
+                    color:var(--dim);margin:12px 0 5px}
+  .modal-card input,.modal-card select{width:100%;background:#0d1820;border:1px solid #1e303d;
+                                      color:#dceaf0;padding:9px 12px;font:inherit;font-size:13.5px;
+                                      border-radius:6px;outline:none}
+  .modal-card input:focus,.modal-card select:focus{border-color:var(--accent,#39d0d8)}
+  .modal-row{display:flex;gap:10px}
+  .modal-row>*{flex:1}
+  .key-row{position:relative}
+  .key-row input{padding-right:34px}
+  .eye-btn{position:absolute;right:8px;top:50%;transform:translateY(-50%);cursor:pointer;
+           background:transparent;border:0;color:var(--dim);font-size:14px;padding:4px}
+  .provider-badge{display:inline-block;margin-top:5px;font-size:11px;color:#7bf5bb;
+                  opacity:.9;letter-spacing:.05em}
+  .btn-row{display:flex;gap:10px;margin-top:20px}
+  .btn-save{flex:1;background:var(--accent,#39d0d8);border:0;color:#04212a;padding:10px;
+            font:inherit;font-size:12px;font-weight:700;letter-spacing:.15em;
+            text-transform:uppercase;border-radius:6px;cursor:pointer}
+  .btn-close{background:#17252f;border:1px solid #283e4c;color:#dceaf0;padding:10px 14px;
+             font:inherit;font-size:12px;font-weight:600;border-radius:6px;cursor:pointer}
 </style>
 </head>
 <body>
@@ -60,10 +96,55 @@
 <div id="caption"></div>
 <div id="offline">◈ bus offline</div>
 <div id="who"></div>
+<button id="settings-btn" title="Settings (S)">⚙ Settings</button>
+
+<div id="settings-modal">
+  <div class="modal-card">
+    <h2>⚙ App Settings</h2>
+    
+    <div class="modal-row">
+      <div>
+        <label for="cfg_user">Your Name</label>
+        <input id="cfg_user" autocomplete="off" placeholder="User name">
+      </div>
+      <div>
+        <label for="cfg_agent">Assistant Name</label>
+        <input id="cfg_agent" autocomplete="off" placeholder="Assistant name">
+      </div>
+    </div>
+
+    <div class="modal-row">
+      <div>
+        <label for="cfg_lang">Language</label>
+        <select id="cfg_lang">
+          <option value="my">Burmese (မြန်မာ)</option>
+          <option value="en">English</option>
+        </select>
+      </div>
+      <div>
+        <label for="cfg_face">Voice &amp; Face</label>
+        <select id="cfg_face"></select>
+      </div>
+    </div>
+
+    <label for="cfg_key">Voice API Key (ElevenLabs / Google Cloud)</label>
+    <div class="key-row">
+      <input type="password" id="cfg_key" autocomplete="off" placeholder="Paste ElevenLabs or Google Cloud key">
+      <button class="eye-btn" id="cfg_eye" type="button" title="Toggle visibility">👁</button>
+    </div>
+    <div class="provider-badge" id="cfg_provider">Active: Microsoft Edge-TTS (Free)</div>
+
+    <div class="btn-row">
+      <button class="btn-save" id="cfg_save">Save Changes</button>
+      <button class="btn-close" id="cfg_close">Cancel</button>
+    </div>
+  </div>
+</div>
+
 <div id="hud">
   <div id="status">idle</div>
   <div id="keys">loading…</div>
-  <div id="hint">F · FULL &nbsp;·&nbsp; B · OVERLAY</div>
+  <div id="hint">F · FULL &nbsp;·&nbsp; B · OVERLAY &nbsp;·&nbsp; S · SETTINGS</div>
 </div>
 
 <script>
@@ -703,15 +784,103 @@ function selectFace(i){
   clearTimeout(window.__whoT);
   window.__whoT=setTimeout(()=>$who.classList.remove("show"),2200);
 }
+/* ---------- settings modal ---------- */
+const $sModal = document.getElementById("settings-modal");
+const $sBtn = document.getElementById("settings-btn");
+const $cfgUser = document.getElementById("cfg_user");
+const $cfgAgent = document.getElementById("cfg_agent");
+const $cfgLang = document.getElementById("cfg_lang");
+const $cfgFace = document.getElementById("cfg_face");
+const $cfgKey = document.getElementById("cfg_key");
+const $cfgEye = document.getElementById("cfg_eye");
+const $cfgProvider = document.getElementById("cfg_provider");
+const $cfgSave = document.getElementById("cfg_save");
+const $cfgClose = document.getElementById("cfg_close");
+
+let isModalOpen = false;
+
+async function openSettings(){
+  try{
+    const d = await (await fetch("/settings")).json();
+    $cfgUser.value = d.user || "";
+    $cfgAgent.value = d.agent || "Lugalay";
+    $cfgLang.value = d.language || "my";
+    $cfgFace.innerHTML = "";
+    (d.faces||[]).forEach(f=>{
+      const opt = document.createElement("option");
+      opt.value = f.id;
+      opt.textContent = `${f.name} · ${f.gender==="male"?"male":"female"} ${f.age}`;
+      if(f.id === d.face) opt.selected = true;
+      $cfgFace.appendChild(opt);
+    });
+    $cfgKey.value = d.has_api_key ? d.api_key_masked : "";
+    $cfgKey.type = "password";
+    $cfgProvider.textContent = `Active: ${d.provider}`;
+  }catch(e){}
+  $sModal.classList.add("open");
+  isModalOpen = true;
+  document.body.style.cursor = "default";
+}
+
+function closeSettings(){
+  $sModal.classList.remove("open");
+  isModalOpen = false;
+}
+
+$sBtn.onclick = openSettings;
+$cfgClose.onclick = closeSettings;
+$cfgEye.onclick = () => {
+  $cfgKey.type = $cfgKey.type === "password" ? "text" : "password";
+};
+
+$cfgSave.onclick = async () => {
+  $cfgSave.disabled = true;
+  $cfgSave.textContent = "Saving…";
+  try{
+    const payload = {
+      user: $cfgUser.value.trim(),
+      agent: $cfgAgent.value.trim(),
+      language: $cfgLang.value,
+      face: $cfgFace.value,
+      api_key: $cfgKey.value.trim()
+    };
+    const r = await fetch("/settings", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(payload)
+    });
+    if(r.ok){
+      S.name = payload.agent || S.name;
+      document.title = S.name;
+      const idx = S.personas.findIndex(p => p.id === payload.face);
+      if(idx >= 0) selectFace(idx);
+      closeSettings();
+    }
+  }catch(e){
+    alert("Failed to save settings: " + e);
+  }finally{
+    $cfgSave.disabled = false;
+    $cfgSave.textContent = "Save Changes";
+  }
+};
+
 addEventListener("keydown",e=>{
+  if(isModalOpen){
+    if(e.key==="Escape") closeSettings();
+    return;
+  }
   const n=Number(e.key);
   if(n>=1 && n<=S.personas.length){ selectFace(n-1); return; }
   if(e.key==="f"||e.key==="F"){ toggleFullscreen(); }
   if(e.key==="b"||e.key==="B"){ toggleOverlay(); }
+  if(e.key==="s"||e.key==="S"){ openSettings(); }
 });
-addEventListener("mousemove",()=>{ document.body.style.cursor="default";
+addEventListener("mousemove",()=>{
+  if(isModalOpen) return;
+  document.body.style.cursor="default";
   clearTimeout(window.__cz);
-  window.__cz=setTimeout(()=>document.body.style.cursor="none",2000); });
+  window.__cz=setTimeout(()=>document.body.style.cursor="none",2000);
+});
 
 /* ---------- boot ---------- */
 (async()=>{
@@ -726,8 +895,6 @@ addEventListener("mousemove",()=>{ document.body.style.cursor="default";
     document.title=S.name;
     if(S.persona) $who.textContent=`${S.persona.name} · ${S.persona.gender==="male"?"M":"F"}${S.persona.age}`;
     fitCast();
-    // measuring before the layout and webfonts settle gives the wrong width,
-    // so measure again once they have
     requestAnimationFrame(fitCast);
     setTimeout(fitCast, 400);
     addEventListener("load", fitCast);

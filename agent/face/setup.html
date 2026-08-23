@@ -55,6 +55,9 @@
   <label for="face">Voice &amp; face</label>
   <select id="face"></select>
 
+  <label for="api_key">Voice API Key (ElevenLabs / Google Cloud) <span style="text-transform:none;opacity:.6">· Optional</span></label>
+  <input type="password" id="api_key" autocomplete="off" placeholder="Paste ElevenLabs or Google Cloud key (optional)">
+
   <button id="go">Start</button>
   <div class="err" id="err"></div>
   <p class="note">Speak English to it, or type Burmese — it answers in whichever
@@ -88,7 +91,8 @@ async function submit(){
     const r=await fetch("/setup",{method:"POST",
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify({user, agent:$("agent").value.trim(),
-                           language:$("language").value, face:$("face").value})});
+                           language:$("language").value, face:$("face").value,
+                           api_key:$("api_key").value.trim()})});
     if(!r.ok) throw new Error((await r.json()).error||"setup failed");
     // hand back to the app, which starts the voice and swaps to the face
     const api=window.pywebview&&window.pywebview.api;
