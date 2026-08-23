@@ -5,244 +5,129 @@
 # Lugalay
 
 A personal AI assistant that lives on this machine: a **mind**, a **mouth**, a
-**face**, and a pair of **hands**. It answers in Burmese, speaks out loud, and
-watches you from a pixel avatar. The brain is Claude Code; almost everything
-else runs locally.
+**face**, and a pair of **hands**. It listens in Burmese and English, answers in natural spoken Burmese or English, and watches you from a pixel avatar. The brain is Claude Code; almost everything else runs locally.
 
 ```
-you speak ──▶ language id ──┬─▶ whisper small.en   ─┐
-                            └─▶ whisper-my-turbo   ─┤
-                                                    ├─▶ claude -p ──┬─▶ kokoro   (English)
-                                                    │               └─▶ edge-tts (Burmese)
-                                                    │                      │
-                            agent/bus/state.json ◀──┴──────────────────────┘
-                                     │
-                                     └──▶ the face
+you speak ──▶ Language Filter / Google STT ──┬─▶ Google STT (my-MM / en-US) ─┐
+                                             └─▶ Whisper Local Fallback      ─┤
+                                                                              ├─▶ Claude / LLM ──┬─▶ Kokoro (English)
+                                                                              │                  └─▶ Microsoft Neural (Burmese)
+                                                                              │                            │
+                                                      agent/bus/state.json ◀──┴────────────────────────────┘
+                                                               │
+                                                               └──▶ the face & settings UI
 ```
 
 ## Run it
 
-Double-click **`Lugalay.app`** — on your Desktop and in this folder. It opens a
-native window with no terminal and no browser. Everything that would have
-scrolled past goes to `agent/logs/app.log`.
+Double-click **`Lugalay.app`** in `/Applications`, on your Desktop, or in this folder. It opens a native window with no terminal and no browser. Everything that would have scrolled past goes to `agent/logs/app.log`.
 
-Then just talk. There is no key to hold: it calibrates the room, waits for you
-to speak, and answers when you stop.
+Then just talk. There is no key to hold: it calibrates the room, waits for you to speak, and answers when you stop.
 
-For a typed session instead, `Lugalay Chat.command` on the Desktop, or:
+For a typed session instead, double-click `Lugalay Chat.command` on the Desktop, or run:
 
 ```bash
 cd ~/Projects/luagalay && claude
 ```
 
-## Keys
+## Keys & Shortcuts
 
-| key | does |
+| Key | Does |
 |---|---|
-| **1-5** | switch person — face **and** voice |
-| **B** | overlay mode: strips the card, bar and caption; just the avatar on your desktop, pinned on top |
-| **F** | fullscreen |
-| **⌘Q** | quit (stops the voice loop and face server too) |
+| **1-5** | Switch persona — face **and** voice (Aung, Hnin, Zaw, Mya, U Ba) |
+| **S** | Open **In-App Settings** modal (configure names, languages, face, API keys) |
+| **B** | Overlay mode: strips the card, bar, and caption; avatar pinned on top of desktop |
+| **F** | Fullscreen toggle |
+| **⌘Q** | Quit (cleanly terminates audio loop, servers, and window) |
 
 The window has no title bar. Drag anywhere to move it.
 
-## The five people
+## ⚙️ In-App Settings
 
-Each is a different pixel human — gender, age, hair, beard, skin — **and each
-speaks in its own voice.** Picking a face picks the voice: the page tells the
-server, and the voice loop reads it before it next speaks, so switching
-mid-conversation changes the next reply.
+Click the **`⚙ Settings`** button (or press **`S`**) at any time to customize your assistant:
 
-| key | who | Burmese voice | English voice |
+* **Your Name & Assistant Name**: Customize what the assistant calls you and what you call the assistant.
+* **Listening Language (နားထောင်မည့် ဘာသာစကား)**:
+  * `Burmese (မြန်မာ သီးသန့်)`: Locks STT strictly to Burmese (`my-MM`), preventing language confusion.
+  * `English Only`: Locks STT strictly to English (`en-US`).
+  * `Auto / Bilingual`: Automatically identifies whether you spoke Burmese or English.
+* **Speaking Language (ပြန်လည်ဖြေကြားမည့် ဘာသာစကား)**:
+  * `Burmese (မြန်မာ)`: Assistant always responds in 100% natural conversational Burmese.
+  * `English`: Assistant always responds in English.
+  * `Match Spoken`: Responds in whichever language you spoke.
+* **Voice & Face**: Seamlessly select between the 5 personas.
+* **Voice API Key**: Enter an optional ElevenLabs or Cloud API key (masked with password show/hide toggle).
+
+## The Five Personas
+
+Each is a different pixel human — gender, age, hair, style, skin — **and each speaks in its own distinct voice.**
+
+| Key | Persona | Burmese Voice | English Voice |
 |---|---|---|---|
-| 1 | Aung, m24 | Thiha, faster and higher | `am_michael` |
-| 2 | Hnin, f22 | Nilar, faster and higher | `af_heart` |
-| 3 | Zaw, m42 | Thiha, natural | `bm_lewis` |
-| 4 | Mya, f40 | Nilar, slightly lower | `bf_emma` |
-| 5 | U Ba, m68 | Thiha, slower and lower | `bm_george` |
+| **1** | **Aung** (Male, 24) | `my-MM-ThihaNeural` (Clear, Energetic) | `am_adam` |
+| **2** | **Hnin** (Female, 22) | `my-MM-NilarNeural` (Sweet, Calm) | `af_heart` |
+| **3** | **Zaw** (Male, 42) | `my-MM-ThihaNeural` (Mature, Confident) | `bm_lewis` |
+| **4** | **Mya** (Female, 40) | `my-MM-NilarNeural` (Warm, Polite) | `bf_emma` |
+| **5** | **U Ba** (Male, 68) | `my-MM-ThihaNeural` (Deep, Wise Elder) | `bm_george` |
 
-Burmese has exactly **two** neural voices in existence — one male, one female —
-so age is carried by rate and pitch rather than a different voice. English has a
-real voice per person from Kokoro.
+Whoever is on screen, the avatar expressions lip-sync to the conversation:
 
-Whoever is on screen, the expression follows the conversation. **Nothing bobs or
-shakes.** Only the eyes, eyebrows and mouth move, and the mouth is driven by the
-real playback amplitude, so it genuinely lip-syncs.
-
-| state | expression |
+| State | Expression |
 |---|---|
-| idle | soft smile, blinks on its own, eyes glance around |
-| listening | brows up, eyes wide, sound bars either side scaled by your mic |
-| thinking | brows furrowed, eyes half-lidded looking up, thought bubble |
-| speaking | mouth opens with the audio, alternating "ah" and "oh" shapes |
+| **idle** | Soft smile, blinking, natural glance movements |
+| **listening** | Brows raised, eyes wide, sound bars scaled to your microphone input |
+| **thinking** | Brows furrowed, eyes looking up with thought bubble animation |
+| **speaking** | Mouth lip-syncs dynamically with live audio output amplitude |
 
-Add or edit people in `faces` in `agent/config.json` — appearance and voice sit
-in one entry, and a sixth person just appears on key 6.
+## Language Capabilities
 
-## Language
+### 👂 Hearing Burmese (Speech-to-Text)
+* **Google Speech-to-Text (`my-MM`)**: Uses in-memory high-fidelity FLAC streaming for **95%+ recognition accuracy** on native Burmese speech, catching colloquial Burmese words, loanwords, and numbers accurately.
+* **Offline Whisper Fallback**: Automatically takes over if internet connection is offline.
 
-Burmese is the default. It answers in Burmese, speaks it aloud, and keeps code,
-commands and file paths in English inside the sentence.
+### 🗣️ Speaking Burmese (Text-to-Speech)
+* **Native Microsoft Neural Engine**: High-fidelity Burmese neural models (`ThihaNeural` & `NilarNeural`) fine-tuned with tailored pitch, speech rate, and conversational pacing per persona.
+* **Clean Stream Synthesis**: All Burmese replies are synthesized as single coherent streams to prevent unnatural phrase repetition or voice hopping.
 
-**You can speak English or type Burmese. You cannot speak Burmese well.**
+## The Brain & Local Fallback
 
-That last one is the real limitation in this stack, and it is not a bug to fix:
+`brain.engine` is `auto`: **Claude Code normally, `qwen3:8b` locally if Claude fails** (usage limits, offline, billing).
 
-| | |
-|---|---|
-| Replying in Burmese | works |
-| Speaking Burmese aloud | works |
-| Reading Burmese you type | works |
-| **Hearing Burmese you speak** | **poor** |
-
-Stock Whisper cannot transcribe Burmese at all — with auto-detect it hears
-Burmese as Thai and writes Thai script. A community fine-tune
-(`whisper-my-turbo`) does produce Burmese, but measured **82.9% character error
-rate** on real speech in this room. It catches the gist and mangles the words.
-Decoder settings made no difference; a larger fine-tune was worse and 4× slower.
-
-If it matters enough, the honest fix is a paid cloud STT with real Burmese
-support — Azure, Google or ElevenLabs Scribe. Nothing free is good enough yet.
-
-## How it decides which language you spoke
-
-Whisper's language id **never returns "my" for real Burmese** — on this machine
-it answers `zh`, `th` or `cy`. English it identifies confidently (p ≥ 0.8). So
-the router asks only *"was that English?"* and treats everything else as
-Burmese, which is also the default here.
-
-```
-you speak → whisper base decides (0.2s)
-            ├─ en, p ≥ 0.5 → small.en          (~0.9s)
-            └─ anything else → whisper-my-turbo (~3.7s)
-```
-
-The reply follows the language you spoke.
-
-## Speed
-
-Roughly **10 seconds** from when you stop talking to the first word out loud, in
-Burmese. English is faster.
-
-| stage | time |
-|---|---|
-| silence before it acts | 0.65s |
-| transcribe (Burmese) | ~3.7s |
-| brain → first sentence | ~2.5s |
-| synthesise and start speaking | ~2.5s |
-| **you stop talking → first word** | **~9-10s** |
-
-Three things buy that: replies are **streamed**, so it speaks the opening
-sentence while still writing the rest; `--strict-mcp-config` and
-`--disable-slash-commands` keep each turn from loading MCP servers and the skill
-catalogue (~1.5s); and the silence window is short.
-
-Two floors cannot be tuned away. Whisper pads every clip to a 30-second window
-internally, so a 4-second sentence costs the same as a 25-second one. And the
-brain needs ~2.5s to produce a first sentence.
-
-## The brain, and the free fallback
-
-`brain.engine` is `auto`: **Claude Code normally, `qwen3:8b` locally when Claude
-fails** — usage limits, offline, billing.
-
-|  | Claude | qwen3:8b |
+| Capability | Claude | Local LLM (qwen3:8b) |
 |---|---|---|
-| Burmese quality | good | coherent, sometimes clumsy |
-| Reads and writes the memory vault | yes | **no** |
-| Runs commands, repairs itself | yes | **no** |
-| Offline | no | yes |
-| Cost | subscription | free |
+| Burmese quality | Natural, intelligent | Coherent |
+| Reads & writes memory vault | **Yes** | No |
+| Runs tools & self-repairs | **Yes** | No |
+| Offline capability | No | **Yes** |
+| Cost | Subscription / API | Free |
 
-The local model has no tools — that is inherent. To compensate, `memory/profile.md`
-is injected into its system prompt so it still knows who you are, but it cannot
-write new memories or fix its own body.
+## Project Structure
 
-> Do not use `qwen3.6:27b`. It is 17GB and this Mac has 18GB; it will swap and
-> may lock up the machine.
-
-## Layout
-
-| path | what it is |
+| Path | Description |
 |---|---|
-| `Lugalay.app` | the desktop app |
-| `CLAUDE.md` | who Lugalay is — edit to change its personality |
-| `memory/` | the mind: an Obsidian vault it reads **and writes** |
-| `agent/config.json` | every setting, and the only place your name lives |
-| `agent/app.py` | starts everything, owns the native window |
-| `agent/setup.py` | first-run: name, language, persona |
-| `agent/templates/` | `CLAUDE.md` and `profile.md` are rendered from here |
-| `agent/voice/` | listening, thinking, speaking |
-| `agent/face/` | the avatar (`:7317`) |
-| `agent/hands/` | the webcam board (`:7318`) and the `present` verb |
-| `agent/bus/` | how the pieces talk to each other |
-| `agent/logs/` | everything the app prints |
+| `Lugalay.app` | Standalone macOS application bundle |
+| `CLAUDE.md` | Persona prompt and conversational instructions |
+| `memory/` | Long-term memory vault (Obsidian markdown format) |
+| `agent/config.json` | Single source of truth for all configurations |
+| `agent/app.py` | App entry point and native window manager |
+| `agent/setup.py` | First-run setup initialization |
+| `agent/voice/` | Listening, thinking, and speaking audio pipeline |
+| `agent/face/` | WebGL pixel avatar and settings server (`:7317`) |
+| `agent/hands/` | Webcam gesture detection server (`:7318`) |
+| `agent/bus/` | Lightweight IPC state bus (`state.json`, `face.json`) |
+| `agent/logs/` | Runtime application logs (`app.log`, `voice.log`) |
 
-### The bus
+## Permissions on macOS
 
-The whole integration is two JSON files. No sockets, no broker, deliberately.
+- **Microphone**: Required for listening to your voice.
+- **Camera**: Optional (only used if hand-tracking gesture board is activated).
 
-```
-state.json   voice ──▶ face     what Lugalay is doing, and how loud
-face.json    face  ──▶ voice    who Lugalay is right now
-```
+## Diagnostics & Troubleshooting
 
-## First run on a new machine
-
-`setup_done: false` makes the first launch open a setup screen instead of the
-face: your name (pre-filled from the macOS account, never assumed), the
-assistant's name, the reply language, and the starting person.
-
-The microphone does not start until that is done — the greeting has to know who
-it is talking to.
-
-Setup writes the name to `agent/config.json` and renders `CLAUDE.md` and
-`memory/profile.md` from `agent/templates/`, so **the name lives in exactly one
-place**. Existing files are backed up to `*.before-setup` first.
-
-To redo it: set `setup_done` to `false` and relaunch, or
+Run diagnostic checks from the repository root:
 
 ```bash
-python3 agent/setup.py
+./agent/voice/diagnose.sh           # Test all dependencies, models, mic, and brain
+./agent/voice/diagnose.sh mic       # Test microphone capture and audio levels
+./agent/voice/diagnose.sh lang      # Test language identification and STT accuracy
 ```
-
-## Permissions macOS will ask for
-
-- **Microphone** — required. Denied, it returns digital silence rather than an
-  error, which looks exactly like a broken mic.
-- **Camera** — only for the hands board.
-
-Accessibility and Input Monitoring are **not** needed. They were, back when
-there was a push-to-talk key; hands-free listening watches no keys.
-
-## When it breaks
-
-Ask Lugalay — it is instructed to repair itself, and `agent/TROUBLESHOOTING.md`
-is written for it to read. Or run the checks yourself:
-
-```bash
-./agent/voice/diagnose.sh           # every dependency, model, the mic, the brain
-./agent/voice/diagnose.sh mic       # is the microphone actually delivering audio?
-./agent/voice/diagnose.sh lang      # record your voice, show how the router sees it
-./agent/voice/diagnose.sh tune      # score Burmese decoding against a known sentence
-```
-
-Each writes to `agent/logs/`, so you can hand me the file rather than retype what
-it said.
-
-Run them from the same terminal app you launch from — macOS grants permission per
-app bundle, so results from anywhere else mean nothing. Use the wrapper rather
-than the scripts directly: they need the venv, and a bare `python3` has none of
-their dependencies.
-
-## What is local, and what is not
-
-Local, offline, private: speech recognition, English speech synthesis, the
-avatar, the hand tracking (vendored, no CDN), and the memory vault.
-
-Two things leave this machine: the **reasoning**, through Claude Code, and the
-**Burmese voice**, because Microsoft's `my-MM` is the only free Burmese TTS that
-exists — Kokoro has none and neither does macOS. Offline, Burmese sentences are
-skipped rather than read aloud in an English voice; English still works.
-
-About **6.9GB** on disk, mostly speech models.
