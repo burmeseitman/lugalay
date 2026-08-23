@@ -44,15 +44,15 @@
       <input id="agent" autocomplete="off" value="Lugalay">
     </div>
     <div>
-      <label for="language">Answers in</label>
+      <label for="language">Language</label>
       <select id="language">
-        <option value="my">Burmese</option>
+        <option value="my">Burmese (မြန်မာ)</option>
         <option value="en">English</option>
       </select>
     </div>
   </div>
 
-  <label for="face">Voice &amp; face</label>
+  <label for="face">Voice &amp; Face</label>
   <select id="face"></select>
 
   <label for="api_key">Voice API Key (ElevenLabs / Google Cloud) <span style="text-transform:none;opacity:.6">· Optional</span></label>
@@ -76,7 +76,7 @@ const $=id=>document.getElementById(id);
     (d.faces||[]).forEach((f,i)=>{
       const o=document.createElement("option");
       o.value=f.id;
-      o.textContent=`${f.name} · ${f.gender==="male"?"male":"female"} ${f.age}`;
+      o.textContent=`${i+1}. ${f.name} · ${f.gender==="male"?"Male":"Female"} (${f.age})`;
       $("face").appendChild(o);
     });
   }catch(e){}

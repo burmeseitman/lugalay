@@ -806,10 +806,10 @@ async function openSettings(){
     $cfgAgent.value = d.agent || "Lugalay";
     $cfgLang.value = d.language || "my";
     $cfgFace.innerHTML = "";
-    (d.faces||[]).forEach(f=>{
+    (d.faces||[]).forEach((f,i)=>{
       const opt = document.createElement("option");
       opt.value = f.id;
-      opt.textContent = `${f.name} · ${f.gender==="male"?"male":"female"} ${f.age}`;
+      opt.textContent = `${i+1}. ${f.name} · ${f.gender==="male"?"Male":"Female"} (${f.age})`;
       if(f.id === d.face) opt.selected = true;
       $cfgFace.appendChild(opt);
     });
