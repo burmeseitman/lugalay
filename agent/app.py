@@ -7,7 +7,8 @@ started underneath and torn down when the window closes.
 
 Everything that used to scroll past in Terminal goes to agent/logs/app.log.
 """
-import atexit, json, os, signal, socket, subprocess, sys, threading, time
+import atexit, json, multiprocessing, os, signal, socket, subprocess, sys, threading, time
+multiprocessing.freeze_support()
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -264,6 +265,7 @@ def main():
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     try:
         main()
     except Exception:
