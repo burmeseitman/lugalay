@@ -1047,14 +1047,19 @@ class Mouth:
         import numpy as np, sounddevice as sd, soundfile as sf
         try:
             f = bus.face()
+            fid = f.get("id", "aung")
             gender = f.get("gender", "male")
             age = f.get("age", 25)
-            # Standard high-quality ElevenLabs voice IDs matched to personas
-            if gender == "female":
-                default_voice = "21m00Tcm4TlvDq8ikWAM" if age < 35 else "EXAVITQu4vr4xnSDxMaL"  # Rachel / Bella
-            else:
-                default_voice = "pNInz6obpgDQGcFmaJgB" if age < 35 else ("ErXwobaYiN019PkySvjV" if age < 55 else "onwK4e9ZLuTAKqWW03F9")  # Adam / Antoni / Daniel
             
+            # Modern ElevenLabs free-tier default voice IDs matched to personas
+            default_voices = {
+                "aung": "bIHbv24MWmeRgasZH58o",    # Will (Young Male)
+                "hnin": "EXAVITQu4vr4xnSDxMaL",    # Sarah (Young Female)
+                "zaw": "iP95p4xoKVk53GoZ742B",     # Chris (Mature Male)
+                "mya": "cgSgspJ2msm6clMCkdW9",     # Jessica (Mature Female)
+                "uba": "JBFqnCBsd6RMkjVDRZzb",     # George (Elder Male)
+            }
+            default_voice = default_voices.get(fid, "EXAVITQu4vr4xnSDxMaL" if gender == "female" else "bIHbv24MWmeRgasZH58o")
             voice_id = (f.get("voice") or {}).get("elevenlabs_voice_id", default_voice)
             url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
             headers = {
