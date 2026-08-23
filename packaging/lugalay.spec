@@ -42,6 +42,7 @@ hiddenimports = [
     "webview", "webview.platforms",
     "sounddevice", "soundfile", "numpy",
     "faster_whisper", "kokoro_onnx", "onnxruntime", "edge_tts",
+    "speech_recognition",
 ]
 if sys.platform == "darwin":
     hiddenimports += ["webview.platforms.cocoa", "AppKit", "Foundation", "objc"]

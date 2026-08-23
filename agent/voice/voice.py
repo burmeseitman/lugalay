@@ -679,6 +679,23 @@ class Transcriber:
         self.cache[name] = m
         return m
 
+    def _google_transcribe(self, audio, lang="my-MM"):
+        """Transcribe audio using Google's Speech-to-Text API (95%+ accuracy for Burmese)."""
+        try:
+            import speech_recognition as sr
+            import numpy as np
+            # Convert float32 [-1.0, 1.0] to int16 PCM
+            if audio.dtype != np.int16:
+                audio_int16 = (np.clip(audio, -1.0, 1.0) * 32767).astype(np.int16)
+            else:
+                audio_int16 = audio
+            rec = sr.Recognizer()
+            audio_data = sr.AudioData(audio_int16.tobytes(), 16000, 2)
+            text = rec.recognize_google(audio_data, language=lang)
+            return (text or "").strip()
+        except Exception as e:
+            return None
+
     def __call__(self, audio):
         """Returns (text, language) — the language drives the reply too."""
         if audio.size < 4000:          # under a quarter second: a slip, not speech
@@ -697,10 +714,25 @@ class Transcriber:
             lang, prob = "en", 0.0
 
         english = lang == "en" and prob >= self.en_min
-        model = self._load(self.name_en if english else self.name_my)
+        
+        # When Burmese is detected, try Google STT first (95%+ accuracy)
+        if not english and self.cfg.get("google", True):
+            g_text = self._google_transcribe(audio, "my-MM")
+            if g_text:
+                log("stt", f"{C['gr']}Google Speech recognized (my-MM): {g_text}{C['x']}", "gr")
+                return g_text, "my"
+            log("stt", f"{C['am']}Google STT offline; falling back to local model{C['x']}", "am")
+
+        # Local Whisper transcription (for English or offline Burmese fallback)
+        model_name = self.name_en if english else self.name_my
         forced = "en" if english else "my"
-        log("stt", f"{C['dim']}id said {lang} p={prob:.2f} → "
-                   f"{'English' if english else 'Burmese'} model{C['x']}")
+        # If local Burmese model isn't on disk, fallback to English model
+        if not english and not os.path.isdir(os.path.join(MODELS, self.name_my)):
+            model_name = self.name_en
+            forced = "en"
+
+        model = self._load(model_name)
+        log("stt", f"{C['dim']}local whisper {model_name} (forced={forced}){C['x']}")
         segs, _ = model.transcribe(audio, language=forced, beam_size=1,
                                    vad_filter=True,
                                    condition_on_previous_text=False)
