@@ -408,7 +408,7 @@ class Brain:
         # a spoken exchange.
         if self.cfg.get("fast", True):
             cmd += ["--strict-mcp-config", "--disable-slash-commands"]
-            effort = self.cfg.get("effort", "low")
+            effort = self.cfg.get("effort")
             if effort:
                 cmd += ["--effort", effort]
 
@@ -739,6 +739,14 @@ class Transcriber:
                 condition_on_previous_text=False)
             return " ".join(x.text for x in segs).strip(), self.lang
 
+        # 1. Try Google STT for Burmese first (95%+ accuracy)
+        if self.cfg.get("google", True):
+            g_text = self._google_transcribe(audio, "my-MM")
+            if g_text and is_burmese(g_text):
+                log("stt", f"{C['gr']}Google Speech recognized (my-MM): {g_text}{C['x']}", "gr")
+                return g_text, "my"
+
+        # 2. If not recognized as Burmese, check language ID for English or fallback
         try:
             lang, prob, _ = self.lid.detect_language(audio)
         except Exception as e:
@@ -746,14 +754,6 @@ class Transcriber:
             lang, prob = "en", 0.0
 
         english = lang == "en" and prob >= self.en_min
-        
-        # When Burmese is detected, try Google STT first (95%+ accuracy)
-        if not english and self.cfg.get("google", True):
-            g_text = self._google_transcribe(audio, "my-MM")
-            if g_text:
-                log("stt", f"{C['gr']}Google Speech recognized (my-MM): {g_text}{C['x']}", "gr")
-                return g_text, "my"
-            log("stt", f"{C['am']}Google STT offline; falling back to local model{C['x']}", "am")
 
         # Local Whisper transcription (for English or offline Burmese fallback)
         model_name = self.name_en if english else self.name_my

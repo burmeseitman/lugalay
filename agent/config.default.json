@@ -52,7 +52,7 @@
     "continue_session": true,
     "timeout_seconds": 180,
     "fast": true,
-    "effort": "low",
+    "effort": null,
     "_fast_note": "fast adds --strict-mcp-config and --disable-slash-commands; measured ~1.5s off every reply. Set false if Lugalay ever needs an MCP server or a skill mid-conversation.",
     "stream": true,
     "_stream_note": "speak the first sentence while the rest is still being generated. Measured: first token ~2.0s, full reply ~4.5s, so this hides most of the wait. Set false to go back to one continuous block.",
