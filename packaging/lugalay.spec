@@ -64,6 +64,12 @@ a = Analysis(
     excludes=["torch", "transformers", "tkinter", "matplotlib", "pytest"],
     noarchive=False,
 )
+
+# Strip legacy Intel binaries bundled inside third-party packages (e.g. speech_recognition/flac-*)
+# so the application is 100% pure Apple Silicon native with no macOS Intel compatibility warnings.
+a.binaries = [b for b in a.binaries if not any(x in b[0] for x in ("flac-mac", "flac-linux", "flac-win32"))]
+a.datas = [d for d in a.datas if not any(x in d[0] for x in ("flac-mac", "flac-linux", "flac-win32", "pocketsphinx-data"))]
+
 pyz = PYZ(a.pure)
 
 exe = EXE(
