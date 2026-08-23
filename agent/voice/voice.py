@@ -65,8 +65,23 @@ class Brain:
             env.pop(k, None)
         return env
 
-    # ── local fallback: Ollama ────────────────────────────────────────
-    def _ollama_system(self, lang):
+    # ── local fallback: any local model server ─────────────────────────
+    # Probed in order. Ollama has its own API; everything else speaks
+    # OpenAI-compatible /v1/chat/completions.
+    LOCAL_BACKENDS = [
+        {"name": "ollama",   "url": "http://127.0.0.1:11434", "api": "ollama",
+         "probe": "/api/tags"},
+        {"name": "lmstudio", "url": "http://127.0.0.1:1234",  "api": "openai",
+         "probe": "/v1/models"},
+        {"name": "jan",      "url": "http://127.0.0.1:1337",  "api": "openai",
+         "probe": "/v1/models"},
+        {"name": "localai",  "url": "http://127.0.0.1:8080",  "api": "openai",
+         "probe": "/v1/models"},
+        {"name": "llamacpp", "url": "http://127.0.0.1:8081",  "api": "openai",
+         "probe": "/v1/models"},
+    ]
+
+    def _local_system(self, lang):
         """A local model has no tools, so who Lugalay is has to be handed to
         it directly instead of being read off disk."""
         parts = [self.LANG.get(lang or self.lang, self.LANG["my"])]
@@ -77,13 +92,52 @@ class Brain:
                      "engineer. This is a SPOKEN conversation: answer in two or "
                      "three sentences of plain prose. No markdown, no lists, no "
                      "code blocks, no URLs — they sound like noise read aloud.")
-        # the vault is the memory; without tools, hand over the part that matters
         try:
             with open(os.path.join(HOME, "memory", "profile.md")) as f:
                 parts.append("What you know about them:\n" + f.read()[:1600])
         except OSError:
             pass
         return "\n\n".join(parts)
+
+    def _discover_local(self):
+        """Find the first local model server that is running.
+
+        Returns (backend_dict, model_name) or (None, None).  The user's
+        config can pin a specific backend via ``ollama.url``; if that is
+        set and reachable it always wins.
+        """
+        import urllib.request
+
+        # honour explicit config first
+        o = self.cfg.get("ollama", {})
+        pinned = o.get("url")
+        if pinned:
+            try:
+                with urllib.request.urlopen(pinned + "/api/tags", timeout=2) as r:
+                    models = json.loads(r.read()).get("models", [])
+                    model = o.get("model", models[0]["name"] if models else "qwen3:8b")
+                    return {"name": "ollama", "url": pinned, "api": "ollama"}, model
+            except Exception:
+                pass
+
+        # scan all known backends
+        for be in self.LOCAL_BACKENDS:
+            try:
+                with urllib.request.urlopen(be["url"] + be["probe"],
+                                            timeout=1.5) as r:
+                    body = json.loads(r.read())
+                    if be["api"] == "ollama":
+                        names = [m["name"] for m in body.get("models", [])]
+                        model = o.get("model", names[0] if names else "qwen3:8b")
+                    else:
+                        names = [m["id"] for m in body.get("data", [])]
+                        model = names[0] if names else "default"
+                    log("brain", f"{C['gr']}found {be['name']} at {be['url']} "
+                                 f"({', '.join(names[:3])}){C['x']}", "gr")
+                    return be, model
+            except Exception:
+                continue
+        return None, None
 
     def _ollama_stream(self, text, lang=None):
         """Yield (piece, is_first) from a local Ollama model."""
@@ -93,13 +147,9 @@ class Brain:
         self.history.append({"role": "user", "content": text})
         payload = {
             "model": o.get("model", "qwen3:8b"),
-            "messages": [{"role": "system", "content": self._ollama_system(lang)}]
+            "messages": [{"role": "system", "content": self._local_system(lang)}]
                         + self.history[-8:],
             "stream": True,
-            # qwen3 and friends are reasoning models: left alone they spend the
-            # whole token budget inside a <think> block and return empty
-            # content. Nobody wants to wait through silent deliberation for a
-            # two-sentence spoken answer.
             "think": bool(o.get("think", False)),
             "options": {"temperature": 0.7,
                         "num_predict": int(o.get("max_tokens", 220))},
@@ -137,6 +187,74 @@ class Brain:
             yield "I do not have anything to say to that.", True
         self.history.append({"role": "assistant", "content": full.strip()})
 
+    def _openai_stream(self, text, lang=None, url="http://127.0.0.1:1234",
+                       model="default"):
+        """Yield (piece, is_first) from any OpenAI-compatible local server
+        (LM Studio, Jan, LocalAI, llama.cpp, text-generation-webui, etc.)."""
+        import urllib.request
+        endpoint = url.rstrip("/") + "/v1/chat/completions"
+        self.history.append({"role": "user", "content": text})
+        payload = {
+            "model": model,
+            "messages": [{"role": "system", "content": self._local_system(lang)}]
+                        + self.history[-8:],
+            "stream": True,
+            "temperature": 0.7,
+            "max_tokens": int(self.cfg.get("ollama", {}).get("max_tokens", 220)),
+        }
+        req = urllib.request.Request(
+            endpoint, data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"}, method="POST")
+
+        buf, sent_first, full = "", False, ""
+        with urllib.request.urlopen(req, timeout=self.cfg.get("timeout_seconds", 180)) as r:
+            for raw in r:
+                raw = raw.strip()
+                if not raw or raw == b"data: [DONE]":
+                    continue
+                line = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else raw
+                if line.startswith("data: "):
+                    line = line[6:]
+                if line == "[DONE]":
+                    break
+                try:
+                    d = json.loads(line)
+                except ValueError:
+                    continue
+                delta = (d.get("choices") or [{}])[0].get("delta", {})
+                piece = delta.get("content", "")
+                if piece:
+                    buf += piece
+                    full += piece
+                    if not sent_first:
+                        m = SENT_END.search(buf)
+                        if m and m.end() >= 12:
+                            head, buf = buf[:m.end()].strip(), buf[m.end():]
+                            sent_first = True
+                            yield head, True
+        rest = buf.strip()
+        if rest:
+            yield rest, not sent_first
+        elif not sent_first:
+            yield "I do not have anything to say to that.", True
+        self.history.append({"role": "assistant", "content": full.strip()})
+
+    def _local_stream(self, text, lang=None):
+        """Try any available local backend. Returns a generator of (piece, is_first)."""
+        be, model = self._discover_local()
+        if be is None:
+            yield "No local model server is running. Start Ollama or LM Studio.", True
+            return
+        log("brain", f"{C['am']}using {be['name']} model {model}{C['x']}", "am")
+        if be["api"] == "ollama":
+            # patch config so _ollama_stream picks the right url/model
+            o = self.cfg.setdefault("ollama", {})
+            o.setdefault("url", be["url"])
+            o.setdefault("model", model)
+            yield from self._ollama_stream(text, lang)
+        else:
+            yield from self._openai_stream(text, lang, url=be["url"], model=model)
+
     @staticmethod
     def ollama_up(url="http://127.0.0.1:11434"):
         import urllib.request
@@ -145,6 +263,13 @@ class Brain:
                 return True
         except Exception:
             return False
+
+    def local_available(self):
+        """Is any local model server reachable?"""
+        be, _ = self._discover_local()
+        return be is not None
+
+
 
     def stream(self, text, lang=None):
         """Yield the reply in pieces as it is generated.
@@ -164,8 +289,8 @@ class Brain:
             return
 
         engine = self.cfg.get("engine", "claude")
-        if engine == "ollama":
-            yield from self._ollama_stream(text, lang)
+        if engine in ("ollama", "lmstudio", "local"):
+            yield from self._local_stream(text, lang)
             return
 
         cmd = self._cmd(text, lang, streaming=True)
@@ -174,12 +299,11 @@ class Brain:
                                     stdout=subprocess.PIPE,
                                     stderr=subprocess.DEVNULL, text=True)
         except FileNotFoundError:
-            if (self.cfg.get("engine") == "auto"
-                    and self.ollama_up(self.cfg.get("ollama", {})
-                                       .get("url", "http://127.0.0.1:11434"))):
+            if (self.cfg.get("engine") in ("auto", "claude", "local")
+                    and self.local_available()):
                 log("brain", f"{C['am']}claude not installed; "
-                             f"falling back to the local model{C['x']}", "am")
-                yield from self._ollama_stream(text, lang)
+                             f"falling back to local model{C['x']}", "am")
+                yield from self._local_stream(text, lang)
                 return
             yield "I cannot find the claude command, so I have no brain right now.", True
             return
@@ -214,12 +338,11 @@ class Brain:
         proc.wait()
 
         if err:
-            if (self.cfg.get("engine") == "auto" and not sent_first
-                    and self.ollama_up(self.cfg.get("ollama", {})
-                                       .get("url", "http://127.0.0.1:11434"))):
+            if (self.cfg.get("engine") in ("auto", "claude", "local") and not sent_first
+                    and self.local_available()):
                 log("brain", f"{C['am']}claude failed ({err}); "
-                             f"falling back to the local model{C['x']}", "am")
-                yield from self._ollama_stream(text, lang)
+                             f"falling back to local model{C['x']}", "am")
+                yield from self._local_stream(text, lang)
                 return
             yield f"My brain refused that one. It said: {err}", not sent_first
             return
@@ -234,6 +357,12 @@ class Brain:
             time.sleep(0.4)
             return f"You said: {text}"
 
+        engine = self.cfg.get("engine", "claude")
+        if engine in ("ollama", "lmstudio", "local"):
+            parts = list(self._local_stream(text, lang))
+            return " ".join(p for p, _ in parts).strip() or \
+                   "I do not have anything to say to that."
+
         cmd = self._cmd(text, lang)
         try:
             p = subprocess.run(cmd, cwd=HOME, env=self._env(), capture_output=True,
@@ -241,12 +370,11 @@ class Brain:
         except subprocess.TimeoutExpired:
             return "Sorry, that took too long and I gave up on it."
         except FileNotFoundError:
-            if (self.cfg.get("engine") == "auto"
-                    and self.ollama_up(self.cfg.get("ollama", {})
-                                       .get("url", "http://127.0.0.1:11434"))):
+            if (self.cfg.get("engine") in ("auto", "claude", "local")
+                    and self.local_available()):
                 log("brain", f"{C['am']}claude not installed; "
-                             f"falling back to the local model{C['x']}", "am")
-                parts = list(self._ollama_stream(text, lang))
+                             f"falling back to local model{C['x']}", "am")
+                parts = list(self._local_stream(text, lang))
                 return " ".join(p for p, _ in parts).strip() or \
                        "I do not have anything to say to that."
             return "I cannot find the claude command, so I have no brain right now."
