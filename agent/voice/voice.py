@@ -719,6 +719,41 @@ def is_burmese(text):
     return bool(MYANMAR.search(text))
 
 
+def clean_spoken_text(text):
+    """Clean LLM output so it sounds like natural, human speech when spoken aloud.
+    Removes markdown formatting, emojis, asterisks, bullet points, raw code, XML/think tags,
+    and normalizes punctuation for natural breathing pauses."""
+    if not text:
+        return ""
+    # Strip XML/HTML tags and reasoning artifacts (e.g. <think>...</think>)
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    text = re.sub(r"<[^>]+>", "", text)
+    # Strip URLs
+    text = re.sub(r"https?://\S+", "link", text)
+    # Strip markdown code blocks, backticks, bold, italics, headers
+    text = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+    text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
+    text = re.sub(r"\*([^*]+)\*", r"\1", text)
+    text = re.sub(r"__([^_]+)__", r"\1", text)
+    text = re.sub(r"_([^_]+)_", r"\1", text)
+    text = re.sub(r"~~([^~]+)~~", r"\1", text)
+    text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
+    # Strip list item prefixes: '1. ', '- ', '* ', '• '
+    text = re.sub(r"^\s*[\d]+\.\s+", "", text, flags=re.MULTILINE)
+    text = re.sub(r"^\s*[-*•]\s+", "", text, flags=re.MULTILINE)
+    # Strip emojis and unicode symbols
+    text = re.sub(r"[\U00010000-\U0010ffff]", "", text)
+    text = re.sub(r"[\u2600-\u27ff]", "", text)
+    # Normalize punctuation and pauses
+    text = re.sub(r"\.{2,}", "…", text)
+    text = re.sub(r"[!]{2,}", "!", text)
+    text = re.sub(r"[?]{2,}", "?", text)
+    text = re.sub(r"[|/\\#@^~]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
 class Mouth:
     """Kokoro, sentence by sentence, so the first words land while the rest
     is still being synthesised. Falls back to macOS `say` if Kokoro cannot
@@ -839,13 +874,14 @@ class Mouth:
 
     def speak(self, text, on_level=None):
         self.stop_flag.clear()
-        if not text.strip():
+        cleaned = clean_spoken_text(text)
+        if not cleaned.strip():
             return
-        if self.kokoro is None and not is_burmese(text):
-            return self._say_fallback(text)
+        if self.kokoro is None and not is_burmese(cleaned):
+            return self._say_fallback(cleaned)
 
         import numpy as np, sounddevice as sd
-        for chunk in self._chunks(text):
+        for chunk in self._chunks(cleaned):
             if self.stop_flag.is_set():
                 break
             if is_burmese(chunk):
@@ -858,14 +894,14 @@ class Mouth:
                 f = bus.face()
                 v = (f.get("voice") or {})
                 gender = f.get("gender", "male")
-                default_en = "af_heart" if gender == "female" else "am_michael"
+                default_en = "af_heart" if gender == "female" else "am_adam"
                 en_voice = v.get("en", default_en)
                 samples, rate = self.kokoro.create(
                     chunk, voice=en_voice,
                     speed=float(self.cfg.get("speed", 1.0)), lang="en-us")
             except Exception as e:
                 log("tts", f"{C['am']}kokoro failed mid-speech ({e}){C['x']}", "am")
-                return self._say_fallback(text)
+                return self._say_fallback(chunk)
 
             block = 1024
             with sd.OutputStream(samplerate=rate, channels=1, dtype="float32") as out:
