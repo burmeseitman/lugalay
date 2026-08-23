@@ -59,6 +59,11 @@ class Handler(BaseHTTPRequestHandler):
                 "api_key_masked": masked,
                 "provider": provider,
             }))
+        if path == "/open-hands":
+            import webbrowser
+            hands_port = int(bus.config().get("hands_port", 7318))
+            webbrowser.open(f"http://127.0.0.1:{hands_port}/")
+            return self._send(200, json.dumps({"ok": True}))
         if path == "/setup-defaults":
             import setup as setup_mod
             return self._send(200, json.dumps({

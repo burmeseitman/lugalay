@@ -163,6 +163,10 @@
     </div>
     <div class="provider-badge" id="cfg_provider">Active: Microsoft Edge-TTS (Free)</div>
 
+    <div style="margin-top:14px">
+      <button id="cfg_hands_btn" type="button" style="width:100%;background:#0d1820;border:1px solid #1e303d;color:#39d0d8;padding:8px;font:inherit;font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;border-radius:6px;cursor:pointer">🖐️ Open Hands &amp; Vision Board (H)</button>
+    </div>
+
     <div class="btn-row">
       <button class="btn-save" id="cfg_save">Save Changes</button>
       <button class="btn-close" id="cfg_close">Cancel</button>
@@ -173,7 +177,7 @@
 <div id="hud">
   <div id="status">idle</div>
   <div id="keys">loading…</div>
-  <div id="hint">F · FULL &nbsp;·&nbsp; B · OVERLAY &nbsp;·&nbsp; S · SETTINGS</div>
+  <div id="hint">F · FULL &nbsp;·&nbsp; B · OVERLAY &nbsp;·&nbsp; H · HANDS &nbsp;·&nbsp; S · SETTINGS</div>
 </div>
 
 <script>
@@ -860,6 +864,8 @@ function closeSettings(){
 
 $sBtn.onclick = openSettings;
 $cfgClose.onclick = closeSettings;
+const $cfgHandsBtn = document.getElementById("cfg_hands_btn");
+if($cfgHandsBtn) $cfgHandsBtn.onclick = () => fetch("/open-hands");
 $cfgEye.onclick = () => {
   $cfgKey.type = $cfgKey.type === "password" ? "text" : "password";
 };
@@ -906,6 +912,7 @@ addEventListener("keydown",e=>{
   if(e.key==="f"||e.key==="F"){ toggleFullscreen(); }
   if(e.key==="b"||e.key==="B"){ toggleOverlay(); }
   if(e.key==="s"||e.key==="S"){ openSettings(); }
+  if(e.key==="h"||e.key==="H"){ fetch("/open-hands"); }
 });
 addEventListener("mousemove",()=>{
   if(isModalOpen) return;

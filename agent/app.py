@@ -128,6 +128,13 @@ def main():
     else:
         print(f"[app] face already on :{face_port}, reusing")
 
+    hands_port = int(CFG.get("hands_port", 7318))
+    if not port_open(hands_port):
+        hands_mod = _load("lugalay_hands", bus.resource("hands", "server.py"))
+        run_in_thread("hands", hands_mod.main, argv=["server.py", "--no-open"])
+    else:
+        print(f"[app] hands already on :{hands_port}, reusing")
+
     def start_voice():
         if any(n == "voice" for n, _ in THREADS):
             return
