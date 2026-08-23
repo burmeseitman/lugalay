@@ -732,24 +732,54 @@ class Transcriber:
             return None
 
     def __call__(self, audio):
-        """Returns (text, language) — the language drives the reply too."""
+        """Returns (text, language) — obeys user's configured listening language."""
         if audio.size < 4000:          # under a quarter second: a slip, not speech
             return "", None
 
+        cfg = bus.config()
+        listen_mode = cfg.get("language", {}).get("listen", "my")
+
+        # 1. Explicit Burmese Listening Mode
+        if listen_mode == "my":
+            if self.cfg.get("google", True):
+                g_text = self._google_transcribe(audio, "my-MM")
+                if g_text:
+                    log("stt", f"{C['gr']}Google Speech recognized (my-MM): {g_text}{C['x']}", "gr")
+                    return g_text, "my"
+            # Offline Burmese fallback
+            if hasattr(self, "name_my") and os.path.isdir(os.path.join(MODELS, self.name_my)):
+                model = self._load(self.name_my)
+                segs, _ = model.transcribe(audio, language="my", beam_size=1, vad_filter=True)
+                return " ".join(x.text for x in segs).strip(), "my"
+            return "", "my"
+
+        # 2. Explicit English Listening Mode
+        if listen_mode == "en":
+            if self.cfg.get("google", True):
+                g_text = self._google_transcribe(audio, "en-US")
+                if g_text:
+                    log("stt", f"{C['gr']}Google Speech recognized (en-US): {g_text}{C['x']}", "gr")
+                    return g_text, "en"
+            model_name = getattr(self, "name_en", "small.en")
+            model = self._load(model_name)
+            segs, _ = model.transcribe(audio, language="en", beam_size=1, vad_filter=True)
+            return " ".join(x.text for x in segs).strip(), "en"
+
+        # 3. Auto / Bilingual Mode
         if not self.bilingual:
             segs, _ = self.single.transcribe(
                 audio, language=self.lang, beam_size=1, vad_filter=True,
                 condition_on_previous_text=False)
             return " ".join(x.text for x in segs).strip(), self.lang
 
-        # 1. Try Google STT for Burmese first (95%+ accuracy)
+        # Try Google STT for Burmese first (95%+ accuracy)
         if self.cfg.get("google", True):
             g_text = self._google_transcribe(audio, "my-MM")
             if g_text and is_burmese(g_text):
                 log("stt", f"{C['gr']}Google Speech recognized (my-MM): {g_text}{C['x']}", "gr")
                 return g_text, "my"
 
-        # 2. If not recognized as Burmese, check language ID for English or fallback
+        # If not recognized as Burmese, check language ID for English or fallback
         try:
             lang, prob, _ = self.lid.detect_language(audio)
         except Exception as e:
@@ -757,11 +787,8 @@ class Transcriber:
             lang, prob = "en", 0.0
 
         english = lang == "en" and prob >= self.en_min
-
-        # Local Whisper transcription (for English or offline Burmese fallback)
         model_name = self.name_en if english else self.name_my
         forced = "en" if english else "my"
-        # If local Burmese model isn't on disk, fallback to English model
         if not english and not os.path.isdir(os.path.join(MODELS, self.name_my)):
             model_name = self.name_en
             forced = "en"
@@ -1338,18 +1365,23 @@ def main():
     hands_free = CFG["mic"].get("mode", "ptt") == "open"
 
     def respond(said, lang=None):
-        """One turn, shared by both microphone modes.
-
-        The reply language follows whatever he just spoke: Burmese in,
-        Burmese out; English in, English out.
-        """
+        """One turn, shared by both microphone modes."""
         log("you", said, "cy")
         bus.write("thinking", said, 0.0)
-        # For Burmese or when streaming is disabled, synthesize the full coherent reply
-        # as a single continuous block to guarantee smooth intonation and prevent phrase repetition
-        is_my = (lang == "my") or is_burmese(said)
+
+        cfg = bus.config()
+        speak_mode = cfg.get("language", {}).get("reply", "my")
+        if speak_mode == "my":
+            target_lang = "my"
+        elif speak_mode == "en":
+            target_lang = "en"
+        else:
+            # Match Spoken Language
+            target_lang = lang if lang in ("my", "en") else ("my" if is_burmese(said) else "en")
+
+        is_my = (target_lang == "my") or is_burmese(said)
         if not CFG.get("brain", {}).get("stream", True) or is_my:
-            reply = brain.ask(said, lang=lang)
+            reply = brain.ask(said, lang=target_lang)
             log(name.lower(), reply, "gr")
             bus.write("speaking", reply, 0.4)
             mouth.speak(reply, level)
@@ -1358,7 +1390,7 @@ def main():
 
         # For English: stream sentence-by-sentence with Kokoro
         said_parts = []
-        for piece, first in brain.stream(said, lang=lang):
+        for piece, first in brain.stream(said, lang=target_lang):
             said_parts.append(piece)
             if first:
                 log(name.lower(), piece, "gr")

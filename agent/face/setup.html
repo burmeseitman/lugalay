@@ -50,10 +50,19 @@
       <input id="agent" autocomplete="off" value="Lugalay">
     </div>
     <div>
-      <label for="language">Language</label>
-      <select id="language">
+      <label for="listen_language">Listening</label>
+      <select id="listen_language">
         <option value="my">Burmese (မြန်မာ)</option>
         <option value="en">English</option>
+        <option value="auto">Auto / Bilingual</option>
+      </select>
+    </div>
+    <div>
+      <label for="speak_language">Speaking</label>
+      <select id="speak_language">
+        <option value="my">Burmese (မြန်မာ)</option>
+        <option value="en">English</option>
+        <option value="auto">Match Spoken</option>
       </select>
     </div>
   </div>
@@ -66,8 +75,7 @@
 
   <button id="go">Start</button>
   <div class="err" id="err"></div>
-  <p class="note">Speak English to it, or type Burmese — it answers in whichever
-     language you chose. Nothing here leaves this machine.</p>
+  <p class="note">Choose your listening and speaking languages. Nothing here leaves this machine.</p>
 </div>
 
 <script>
@@ -97,7 +105,9 @@ async function submit(){
     const r=await fetch("/setup",{method:"POST",
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify({user, agent:$("agent").value.trim(),
-                           language:$("language").value, face:$("face").value,
+                           listen_language:$("listen_language").value,
+                           speak_language:$("speak_language").value,
+                           face:$("face").value,
                            api_key:$("api_key").value.trim()})});
     if(!r.ok) throw new Error((await r.json()).error||"setup failed");
     // hand back to the app, which starts the voice and swaps to the face

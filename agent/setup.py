@@ -83,16 +83,18 @@ def render(user, agent="Lugalay", agent_my="လူကလေး"):
 
 
 def apply(answers):
-    """answers: {user, agent, language, face}. Returns a summary dict."""
+    """answers: {user, agent, listen_language, speak_language, language, face}. Returns a summary dict."""
     cfg = bus.config()
     user = (answers.get("user") or "").strip() or detect_name() or "friend"
     agent = (answers.get("agent") or cfg.get("name") or "Lugalay").strip()
-    lang = answers.get("language") or "my"
+    listen_lang = answers.get("listen_language") or "my"
+    speak_lang = answers.get("speak_language") or answers.get("language") or "my"
     face = answers.get("face") or cfg.get("face")
 
     cfg["user"] = user
     cfg["name"] = agent
-    cfg.setdefault("language", {})["reply"] = lang
+    cfg.setdefault("language", {})["listen"] = listen_lang
+    cfg.setdefault("language", {})["reply"] = speak_lang
     if "api_key" in answers:
         key = (answers.get("api_key") or "").strip()
         if key and not key.startswith("•"):
@@ -109,8 +111,8 @@ def apply(answers):
         json.dump(cfg, f, indent=2, ensure_ascii=False)
 
     files = render(user, agent)
-    return {"user": user, "agent": agent, "language": lang,
-            "face": cfg.get("face"), "files": files}
+    return {"user": user, "agent": agent, "listen_language": listen_lang,
+            "speak_language": speak_lang, "face": cfg.get("face"), "files": files}
 
 
 def interactive():

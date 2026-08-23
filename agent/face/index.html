@@ -136,17 +136,25 @@
 
     <div class="modal-row">
       <div>
-        <label for="cfg_lang">Language</label>
-        <select id="cfg_lang">
-          <option value="my">Burmese (မြန်မာ)</option>
-          <option value="en">English</option>
+        <label for="cfg_listen">Listening Language</label>
+        <select id="cfg_listen">
+          <option value="my">Burmese (မြန်မာ သီးသန့်)</option>
+          <option value="en">English Only</option>
+          <option value="auto">Auto / Bilingual</option>
         </select>
       </div>
       <div>
-        <label for="cfg_face">Voice &amp; Face</label>
-        <select id="cfg_face"></select>
+        <label for="cfg_speak">Speaking Language</label>
+        <select id="cfg_speak">
+          <option value="my">Burmese (မြန်မာ)</option>
+          <option value="en">English</option>
+          <option value="auto">Match Spoken</option>
+        </select>
       </div>
     </div>
+
+    <label for="cfg_face">Voice &amp; Face</label>
+    <select id="cfg_face"></select>
 
     <label for="cfg_key">Voice API Key (ElevenLabs / Google Cloud)</label>
     <div class="key-row">
@@ -810,7 +818,8 @@ const $sModal = document.getElementById("settings-modal");
 const $sBtn = document.getElementById("settings-btn");
 const $cfgUser = document.getElementById("cfg_user");
 const $cfgAgent = document.getElementById("cfg_agent");
-const $cfgLang = document.getElementById("cfg_lang");
+const $cfgListen = document.getElementById("cfg_listen");
+const $cfgSpeak = document.getElementById("cfg_speak");
 const $cfgFace = document.getElementById("cfg_face");
 const $cfgKey = document.getElementById("cfg_key");
 const $cfgEye = document.getElementById("cfg_eye");
@@ -825,7 +834,8 @@ async function openSettings(){
     const d = await (await fetch("/settings")).json();
     $cfgUser.value = d.user || "";
     $cfgAgent.value = d.agent || "Lugalay";
-    $cfgLang.value = d.language || "my";
+    $cfgListen.value = d.listen_language || "my";
+    $cfgSpeak.value = d.speak_language || "my";
     $cfgFace.innerHTML = "";
     (d.faces||[]).forEach((f,i)=>{
       const opt = document.createElement("option");
@@ -861,7 +871,8 @@ $cfgSave.onclick = async () => {
     const payload = {
       user: $cfgUser.value.trim(),
       agent: $cfgAgent.value.trim(),
-      language: $cfgLang.value,
+      listen_language: $cfgListen.value,
+      speak_language: $cfgSpeak.value,
       face: $cfgFace.value,
       api_key: $cfgKey.value.trim()
     };

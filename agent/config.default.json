@@ -69,8 +69,9 @@
     "_engine_note": "auto = Claude first, qwen3:8b locally if Claude fails (usage limit, offline). claude = Claude only. ollama = local only (free/offline, but NO tools: it cannot read or write the memory vault, run commands, or repair itself). qwen3.6:27b is 17GB and this Mac has 18GB — do not use it, it will swap."
   },
   "language": {
+    "listen": "my",
     "reply": "my",
-    "_note": "my = Burmese default, en = English"
+    "_note": "listen: 'my' (Burmese), 'en' (English), 'auto' (Bilingual). reply: 'my' (Burmese), 'en' (English), 'auto' (Match spoken)"
   },
   "window": {
     "width": 460,

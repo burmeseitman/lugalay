@@ -51,7 +51,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, json.dumps({
                 "user": cfg.get("user", ""),
                 "agent": cfg.get("name", "Lugalay"),
-                "language": cfg.get("language", {}).get("reply", "my"),
+                "listen_language": cfg.get("language", {}).get("listen", "my"),
+                "speak_language": cfg.get("language", {}).get("reply", "my"),
                 "face": bus.face_id(),
                 "faces": bus.faces(),
                 "has_api_key": bool(raw_key),
@@ -94,6 +95,10 @@ class Handler(BaseHTTPRequestHandler):
                     cfg["user"] = data["user"].strip()
                 if "agent" in data and data["agent"].strip():
                     cfg["name"] = data["agent"].strip()
+                if "listen_language" in data and data["listen_language"]:
+                    cfg.setdefault("language", {})["listen"] = data["listen_language"]
+                if "speak_language" in data and data["speak_language"]:
+                    cfg.setdefault("language", {})["reply"] = data["speak_language"]
                 if "language" in data and data["language"]:
                     cfg.setdefault("language", {})["reply"] = data["language"]
                 if "face" in data and data["face"]:
