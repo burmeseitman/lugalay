@@ -808,20 +808,6 @@ def format_burmese_for_speech(text):
     return text
 
 
-def burmese_to_ssml(text, voice, rate="-2%", pitch="+0Hz"):
-    """Convert Burmese text to rich SSML with natural breathing pauses on clauses and sentences."""
-    body = text
-    body = body.replace("။", "<break time='320ms'/> ")
-    body = body.replace("၊", "<break time='180ms'/> ")
-    return f"""<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='my-MM'>
-    <voice name='{voice}'>
-        <prosody rate='{rate}' pitch='{pitch}'>
-            {body}
-        </prosody>
-    </voice>
-</speak>"""
-
-
 def clean_spoken_text(text):
     """Clean LLM output so it sounds like natural, human speech when spoken aloud.
     Removes markdown formatting, emojis, asterisks, bullet points, raw code, XML/think tags,
@@ -950,7 +936,7 @@ class Mouth:
             return False
 
     def _speak_burmese_edge(self, text, on_level=None):
-        """Synthesize Burmese using Microsoft's Native Neural Speech Model with SSML prosody."""
+        """Synthesize Burmese using Microsoft's Native Neural Speech Model."""
         import asyncio, tempfile
         import numpy as np, sounddevice as sd, soundfile as sf
         try:
@@ -966,15 +952,11 @@ class Mouth:
         voice = v.get("my", default_my)
         rate = v.get("my_rate", "-2%")
         pitch = v.get("my_pitch", "+0Hz")
-        ssml = burmese_to_ssml(text, voice, rate, pitch)
         tmp = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
         tmp.close()
         try:
             async def go():
-                try:
-                    await edge_tts.Communicate(ssml, voice).save(tmp.name)
-                except Exception:
-                    await edge_tts.Communicate(text, voice, rate=rate, pitch=pitch).save(tmp.name)
+                await edge_tts.Communicate(text, voice, rate=rate, pitch=pitch).save(tmp.name)
             asyncio.run(go())
             audio, rate_hz = sf.read(tmp.name, dtype="float32")
             if audio.ndim > 1:
