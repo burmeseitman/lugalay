@@ -1034,19 +1034,22 @@ class Mouth:
         cleaned = clean_spoken_text(text)
         if not cleaned.strip():
             return
-        if self.kokoro is None and not is_burmese(cleaned):
+
+        # If the text contains Burmese, synthesize the entire response coherently
+        # using the Burmese Neural Engine. This prevents jarring accent/voice hopping mid-sentence.
+        if is_burmese(cleaned):
+            self._speak_burmese(cleaned, on_level)
+            on_level and on_level(0.0)
+            return
+
+        # Pure English response -> synthesize with Kokoro
+        if self.kokoro is None:
             return self._say_fallback(cleaned)
 
         import numpy as np, sounddevice as sd
         for chunk in self._chunks(cleaned):
             if self.stop_flag.is_set():
                 break
-            if is_burmese(chunk):
-                if self._speak_burmese(chunk, on_level):
-                    continue
-                # Burmese failed (offline?) — skip rather than read the
-                # script aloud in an English voice, which is unintelligible
-                continue
             try:
                 f = bus.face()
                 v = (f.get("voice") or {})
