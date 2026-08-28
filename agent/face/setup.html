@@ -70,8 +70,9 @@
   <label for="face">Voice &amp; Face</label>
   <select id="face"></select>
 
-  <label for="api_key">Voice API Key (ElevenLabs / Google Cloud) <span style="text-transform:none;opacity:.6">· Optional</span></label>
-  <input type="password" id="api_key" autocomplete="off" placeholder="Paste ElevenLabs or Google Cloud key (optional)">
+  <label for="api_key">Voice API Key <span style="text-transform:none;opacity:.6">· Optional, adds better voices</span></label>
+  <input type="password" id="api_key" autocomplete="off" placeholder="AIzaSy… or AQ.… for Google Gemini TTS (recommended)">
+  <p class="note" style="margin:6px 0 0">Free Microsoft Edge-TTS runs by default. A Google key (<b>AIzaSy</b> or <b>AQ.</b>) unlocks Gemini TTS, with 30+ voices that speak Burmese.</p>
 
   <button id="go">Start</button>
   <div class="err" id="err"></div>

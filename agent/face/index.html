@@ -16,8 +16,14 @@
   html.zen #hud,
   html.zen #caption,
   html.zen #who,
+  html.zen #settings-btn,
   html.zen #offline{opacity:0 !important;pointer-events:none}
   body{font-family:"SF Mono",ui-monospace,Menlo,monospace;color:var(--dim);cursor:none}
+  /* the avatar is meant to be cursor-less, but inputs are not — give the
+     settings dialog a normal cursor so drag-to-select works */
+  #settings-modal, #settings-modal * { cursor: auto }
+  #settings-modal input, #settings-modal select { cursor: text }
+  #settings-modal button { cursor: pointer }
   canvas{position:fixed;inset:0;z-index:1;display:block;
          width:100vw;height:100vh}
   #hud{position:fixed;z-index:2;left:0;right:0;bottom:0;padding:9px 14px;
@@ -26,7 +32,9 @@
        white-space:nowrap;overflow:hidden;pointer-events:none}
   #keys{opacity:.26;overflow:hidden;text-overflow:ellipsis;min-width:0;
         flex:1 1 auto;text-align:right}
-  #hint{opacity:.42;flex:0 0 auto;white-space:nowrap}
+  /* the hint gives up room before anything else in the bar does, and the
+     script shortens it rather than letting it be sliced mid-word */
+  #hint{opacity:.42;flex:0 1 auto;min-width:0;white-space:nowrap;overflow:hidden}
   #status{flex:0 0 auto;color:var(--accent,#39d0d8);
           text-shadow:0 0 14px var(--accent,#39d0d8);transition:color .4s ease}
   #caption{position:fixed;z-index:2;left:12px;right:12px;bottom:32px;
@@ -40,9 +48,11 @@
            line-height:1.8;letter-spacing:0;text-transform:none;
            color:#dceaf0;transition:opacity .45s ease;pointer-events:none;
            text-shadow:0 0 24px rgba(0,0,0,.95);
-           /* a long reply is clamped rather than running off the glass */
-           display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;
-           overflow:hidden;max-height:30vh;
+           /* A long reply used to be clamped to three lines, which cut the end
+              off with no way to see it. Now it gets the room it needs, the
+              script shrinks the type to fit, and anything still too long
+              scrolls itself while he is being spoken to. */
+           overflow:hidden;max-height:46vh;
            overflow-wrap:break-word;word-break:break-word}
   #caption.on{opacity:.94}
   #offline{position:fixed;top:22px;right:30px;font-size:11px;letter-spacing:.16em;
@@ -156,12 +166,17 @@
     <label for="cfg_face">Voice &amp; Face</label>
     <select id="cfg_face"></select>
 
-    <label for="cfg_key">Voice API Key (ElevenLabs / Google Cloud)</label>
+    <label for="cfg_key">Voice API Key <span style="text-transform:none;opacity:.6">· Optional, for better Burmese voices</span></label>
     <div class="key-row">
-      <input type="password" id="cfg_key" autocomplete="off" placeholder="Paste ElevenLabs or Google Cloud key">
+      <input type="password" id="cfg_key" autocomplete="off" placeholder="AIzaSy… or AQ.… (Google Gemini TTS · recommended)">
       <button class="eye-btn" id="cfg_eye" type="button" title="Toggle visibility">👁</button>
     </div>
     <div class="provider-badge" id="cfg_provider">Active: Microsoft Edge-TTS (Free)</div>
+    <div style="font-size:11px;opacity:.6;margin-top:4px;line-height:1.5">
+      Auto-detected by prefix: <b>AIzaSy…</b>/<b>AQ.…</b> Google Gemini (30+ voices, best quality) ·
+      <b>sk-…</b> OpenAI · anything else ElevenLabs.
+      Leave empty for free Microsoft Edge-TTS.
+    </div>
 
     <div style="margin-top:14px">
       <button id="cfg_hands_btn" type="button" style="width:100%;background:#0d1820;border:1px solid #1e303d;color:#39d0d8;padding:8px;font:inherit;font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;border-radius:6px;cursor:pointer">🖐️ Open Hands &amp; Vision Board (H)</button>
@@ -177,7 +192,7 @@
 <div id="hud">
   <div id="status">idle</div>
   <div id="keys">loading…</div>
-  <div id="hint">F · FULL &nbsp;·&nbsp; B · OVERLAY &nbsp;·&nbsp; H · HANDS &nbsp;·&nbsp; S · SETTINGS</div>
+  <div id="hint"></div>
 </div>
 
 <script>
@@ -248,9 +263,13 @@ const pixel={
   look:{x:0,y:0,tx:0,ty:0,at:1.5},
   mouthOpen:0, viseme:0, browT:0,
   build(){
-    // the bottom of the window belongs to the caption and the hud, so fit the
-    // face into the space above it instead of centring on the whole window
-    const avail = H*0.78;
+    // The bottom of the window belongs to the caption and the hud, so fit the
+    // face into the space above it. How much that is depends on how much he is
+    // being told: a one-line reply leaves the face nearly full size, a long one
+    // makes it step back rather than have the text printed across its chin.
+    const capH = (typeof $cap !== "undefined" && $cap && $cap.style.display !== "none")
+                 ? $cap.getBoundingClientRect().height : 0;
+    const avail = Math.max(H*0.40, Math.min(H*0.78, H - capH - 58));
     this.P=Math.max(3, Math.floor(Math.min(W/this.GW, avail/this.GH)*0.94));
     this.ox=Math.round((W-this.GW*this.P)/2);
     this.oy=Math.round((avail-this.GH*this.P)/2);
@@ -732,12 +751,62 @@ function frame(now){
   requestAnimationFrame(frame);
 }
 
+const $cap=document.getElementById("caption");
+
+/* ---------- caption: make the whole reply readable ----------
+   Three problems, in order: the text may not fit, shrinking it only helps so
+   far, and past that the tail has to come to him rather than him to it — the
+   window has no scrollbar he can reach, the caption ignores the mouse so that
+   dragging the window still works anywhere. */
+const CAP_MAX=18, CAP_MIN=11;          // px; CAP_MAX matches the css clamp ceiling
+let capScroll=null;
+
+function fitCaption(){
+  cancelAnimationFrame(capScroll); capScroll=null;
+  $cap.scrollTop=0;
+  if(!$cap.textContent) return;
+
+  // shrink until it fits, or until it would get too small to read
+  let size=CAP_MAX;
+  $cap.style.fontSize=size+"px";
+  while(size>CAP_MIN && $cap.scrollHeight>$cap.clientHeight){
+    size-=0.5;
+    $cap.style.fontSize=size+"px";
+  }
+
+  // the face has to give up the room the caption just took
+  if(typeof pixel !== "undefined") pixel.build();
+
+  const over=$cap.scrollHeight-$cap.clientHeight;
+  if(over<=1) return;
+
+  // Still too tall: creep down it like a teleprompter. Pace it off how much is
+  // hidden — about six seconds per screenful — and hold at the top first so the
+  // opening words can be read before anything moves.
+  const dur=Math.max(2500, (over/$cap.clientHeight)*6000);
+  const hold=1200;
+  const t0=performance.now();
+  const step=(t)=>{
+    const e=t-t0;
+    if(e>hold) $cap.scrollTop=Math.min(over, over*Math.min(1,(e-hold)/dur));
+    if(e<hold+dur){ capScroll=requestAnimationFrame(step); } else capScroll=null;
+  };
+  capScroll=requestAnimationFrame(step);
+}
+
+function showCaption(text){
+  $cap.textContent=text||"";
+  $cap.classList.toggle("on", !!text);
+  fitCaption();
+}
+addEventListener("resize", fitCaption);
+
 /* ---------- bus polling ---------- */
 const $status=document.getElementById("status");
-const $cap=document.getElementById("caption");
 const $off=document.getElementById("offline");
 const $who=document.getElementById("who");
 const $keys=document.getElementById("keys");
+const $hint=document.getElementById("hint");
 async function poll(){
   try{
     const r=await fetch("/state",{cache:"no-store"});
@@ -746,8 +815,7 @@ async function poll(){
     S.level = Math.max(0,Math.min(1, d.level||0));
     if(d.text!==S.text){
       S.text=d.text||"";
-      $cap.textContent=S.text;
-      $cap.classList.toggle("on", !!S.text);
+      showCaption(S.text);
     }
     $status.textContent=S.name.toUpperCase()+" · "+STATES[S.state].label;
     $status.style.setProperty("--accent",STATES[S.state].accent);
@@ -765,11 +833,49 @@ function fitCast(){
   // would be cut off mid-list, which tells you less than nothing — so drop to
   // a compact label instead of showing "1 Aung · 2 Hnin · …".
   if(!S.personas.length) return;
-  $keys.textContent = S.personas.map((p,i)=>`${i+1} ${p.name}`).join(" · ");
-  if($keys.scrollWidth > $keys.clientWidth + 1){
-    $keys.textContent = `1-${S.personas.length} faces`;
+  fitHud();
+}
+
+/* ---------- the bottom bar, at whatever width the window happens to be ----
+   Three things share one line: who is speaking, the face keys, and the
+   shortcut hint. At 460px they do not fit, and the bar simply clipped the
+   right-hand end — so the last shortcut was always half a letter. The hint is
+   the least important of the three, so it is the one that gets shorter. */
+const HINT_FORMS = [
+  "F · FULL  ·  B · OVERLAY  ·  H · HANDS  ·  S · SETTINGS",
+  "F · B · H · S",
+  "",
+];
+function hudOverflows(hud){
+  // The children are allowed to shrink, so the bar's own scrollWidth never
+  // grows and cannot be asked. Add up what the three of them actually want
+  // instead, plus the gaps and padding between them.
+  const cs = getComputedStyle(hud);
+  const chrome = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight)
+               + parseFloat(cs.columnGap || cs.gap || 0) * 2;
+  let want = 0;
+  for(const el of hud.children) want += el.scrollWidth;
+  return want + chrome > hud.clientWidth + 1;
+}
+function fitHud(){
+  const hud = document.getElementById("hud");
+  if(!hud || !$hint) return;
+  const faces = S.personas.length;
+  const keyForms = faces
+    ? [S.personas.map((p,i)=>`${i+1} ${p.name}`).join(" · "), `1-${faces} faces`, ""]
+    : [$keys.textContent];
+
+  // Give up the least useful thing first: the shortcut hint shortens, then the
+  // face names collapse to a count, then the hint goes altogether, and only
+  // then the face keys. Whoever is speaking is never sacrificed.
+  const ladder = [[0,0],[1,0],[1,1],[2,1],[2,2]];
+  for(const [h,k] of ladder){
+    $hint.textContent = HINT_FORMS[Math.min(h, HINT_FORMS.length-1)];
+    $keys.textContent = keyForms[Math.min(k, keyForms.length-1)];
+    if(!hudOverflows(hud)) return;
   }
 }
+addEventListener("resize", fitHud);
 
 function applyOverlay(zen){
   // Overlay mode strips the card and every label, leaving the avatar floating
@@ -777,7 +883,10 @@ function applyOverlay(zen){
   // a specificity fight fails silently, and this must not fail silently.
   document.documentElement.classList.toggle("zen", zen);
   const hide = zen ? "none" : "";
-  ["plate","hud","caption","who","offline"].forEach(id=>{
+  // Overlay means the avatar and nothing else. The settings button was left
+  // off this list, so it went on floating over the desktop in the one mode
+  // whose whole point is that nothing but the face is showing.
+  ["plate","hud","caption","who","offline","settings-btn"].forEach(id=>{
     const el=document.getElementById(id);
     if(el) el.style.display = hide;
   });
@@ -787,6 +896,9 @@ function applyOverlay(zen){
   const api = window.pywebview && window.pywebview.api;
   if(api && api.set_on_top) api.set_on_top(zen);
   S.overlay = zen;
+  // the caption cannot be measured while it is display:none, so anything shown
+  // during overlay mode was never fitted — do it now that it has a size again
+  if(!zen && typeof fitCaption === "function") requestAnimationFrame(fitCaption);
   return zen;
 }
 
@@ -833,25 +945,30 @@ const $cfgClose = document.getElementById("cfg_close");
 
 let isModalOpen = false;
 
+async function loadSettings(){
+  // Fetch once and paint every field, badge included. Called on open, and
+  // again after save so the badge shows what actually took effect — an
+  // AIzaSy… key flipping the provider from Edge to Google Cloud.
+  const d = await (await fetch("/settings", {cache: "no-store"})).json();
+  $cfgUser.value = d.user || "";
+  $cfgAgent.value = d.agent || "Lugalay";
+  $cfgListen.value = d.listen_language || "my";
+  $cfgSpeak.value = d.speak_language || "my";
+  $cfgFace.innerHTML = "";
+  (d.faces||[]).forEach((f,i)=>{
+    const opt = document.createElement("option");
+    opt.value = f.id;
+    opt.textContent = `${i+1}. ${f.name} · ${f.gender==="male"?"Male":"Female"} (${f.age})`;
+    if(f.id === d.face) opt.selected = true;
+    $cfgFace.appendChild(opt);
+  });
+  $cfgKey.value = d.has_api_key ? d.api_key_masked : "";
+  $cfgKey.type = "password";
+  $cfgProvider.textContent = `Active: ${d.provider}`;
+}
+
 async function openSettings(){
-  try{
-    const d = await (await fetch("/settings")).json();
-    $cfgUser.value = d.user || "";
-    $cfgAgent.value = d.agent || "Lugalay";
-    $cfgListen.value = d.listen_language || "my";
-    $cfgSpeak.value = d.speak_language || "my";
-    $cfgFace.innerHTML = "";
-    (d.faces||[]).forEach((f,i)=>{
-      const opt = document.createElement("option");
-      opt.value = f.id;
-      opt.textContent = `${i+1}. ${f.name} · ${f.gender==="male"?"Male":"Female"} (${f.age})`;
-      if(f.id === d.face) opt.selected = true;
-      $cfgFace.appendChild(opt);
-    });
-    $cfgKey.value = d.has_api_key ? d.api_key_masked : "";
-    $cfgKey.type = "password";
-    $cfgProvider.textContent = `Active: ${d.provider}`;
-  }catch(e){}
+  try{ await loadSettings(); }catch(e){}
   $sModal.classList.add("open");
   isModalOpen = true;
   document.body.style.cursor = "default";
@@ -892,11 +1009,18 @@ $cfgSave.onclick = async () => {
       document.title = S.name;
       const idx = S.personas.findIndex(p => p.id === payload.face);
       if(idx >= 0) selectFace(idx);
-      closeSettings();
+      // Reload the settings so the provider badge shows what actually took
+      // effect — Free Edge-TTS -> Google Cloud TTS when an AIzaSy key lands.
+      // Closing the dialog before reloading meant a "did nothing" impression.
+      await loadSettings();
+      $cfgSave.textContent = "Saved ✓";
+      setTimeout(() => $cfgSave.textContent = "Save Changes", 1400);
+    } else {
+      alert("Save failed: " + await r.text());
     }
+    $cfgSave.disabled = false;
   }catch(e){
     alert("Failed to save settings: " + e);
-  }finally{
     $cfgSave.disabled = false;
     $cfgSave.textContent = "Save Changes";
   }

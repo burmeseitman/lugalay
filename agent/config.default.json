@@ -57,21 +57,32 @@
     "effort": null,
     "_fast_note": "fast adds --strict-mcp-config and --disable-slash-commands; measured ~1.5s off every reply. Set false if Lugalay ever needs an MCP server or a skill mid-conversation.",
     "stream": true,
-    "_stream_note": "speak the first sentence while the rest is still being generated. Measured: first token ~2.0s, full reply ~4.5s, so this hides most of the wait. Set false to go back to one continuous block.",
+    "_stream_note": "Speak the first sentence while the rest is still being written. Measured on an M3 Pro: Burmese first sound at 6.8s instead of 12.9s. Burmese streams through one Burmese voice in sentence-sized units, so the accent never changes mid-answer — the thing that made this whole-block in the first place. Set false to go back to holding the reply until it is finished.",
     "engine": "auto",
     "ollama": {
       "url": "http://127.0.0.1:11434",
       "model": "qwen3:8b",
       "max_tokens": 220,
       "think": false,
-      "_think_note": "qwen3 is a reasoning model; left on, it spends the whole token budget inside <think> and returns empty content."
+      "_think_note": "qwen3 is a reasoning model; left on, it spends the whole token budget inside <think> and returns empty content.",
+      "keep_alive": "30m",
+      "_keep_alive_note": "How long Ollama holds the model in memory after a reply. Default 5m means a normal pause in conversation costs a 4-9s reload on the next question. '-1' never unloads, at the price of ~5GB of RAM sitting there.",
+      "_model_note": "A preference, not a requirement. If this model is not installed, the smallest one that is gets used instead and the log says so — deleting a model used to leave the fallback calling something Ollama no longer had, which failed silently. Cloud-hosted entries (name ending :cloud) are skipped, since a fallback for being offline cannot itself need the internet."
     },
-    "_engine_note": "auto = Claude first, qwen3:8b locally if Claude fails (usage limit, offline). claude = Claude only. ollama = local only (free/offline, but NO tools: it cannot read or write the memory vault, run commands, or repair itself). qwen3.6:27b is 17GB and this Mac has 18GB — do not use it, it will swap."
+    "_engine_note": "auto = Claude first, then a hosted or local model if Claude fails. claude = Claude only. openai / groq / together / openrouter / deepseek = a hosted OpenAI-compatible model, configured under brain.remote. ollama / lmstudio = the local model server on this machine — no tools unless the model itself supports tool calling, in which case memory read/write, page opening and the board are available.",
+    "remote": {
+      "api_key": "",
+      "url": "",
+      "model": "",
+      "_note": "A hosted OpenAI-compatible model. Set brain.engine to one of 'openai', 'groq', 'together', 'openrouter', 'deepseek' to use one of the known presets; url and model can be left empty then and the preset fills them in. For anything else — a self-hosted endpoint, Fireworks, xAI — set engine to 'openai' and give url and model here. The key can also come from the OPENAI_API_KEY environment variable. Local backends (ollama, lmstudio) do not use this section."
+    }
   },
   "language": {
     "listen": "my",
     "reply": "my",
-    "_note": "listen: 'my' (Burmese), 'en' (English), 'auto' (Bilingual). reply: 'my' (Burmese), 'en' (English), 'auto' (Match spoken)"
+    "_note": "listen: 'my' (Burmese), 'en' (English), 'auto' (Bilingual). reply: 'my' (Burmese), 'en' (English), 'auto' (Match spoken)",
+    "my_prompt_file": "",
+    "_prompt_note": "How he speaks each language lives in agent/voice/prompts/*.md and is re-read every turn, so edits land on the next sentence. my_prompt_file points somewhere else entirely if you want to keep your own version outside the repo; empty means use the shipped one."
   },
   "window": {
     "width": 460,
@@ -186,5 +197,10 @@
   "_faces_note": "press 1-5 to switch. The voice follows the face: Burmese has only two neural voices, so age is expressed through rate and pitch.",
   "greeting_en": "Hello {user}, what are we working on today?",
   "setup_done": false,
-  "_setup_note": "setup_done false makes the app open its first-run screen instead of the face. The name lives here and only here; CLAUDE.md and memory/profile.md are rendered from agent/templates/ during setup."
+  "_setup_note": "setup_done false makes the app open its first-run screen instead of the face. The name lives here and only here; CLAUDE.md and memory/profile.md are rendered from agent/templates/ during setup.",
+  "eyes": {
+    "enabled": true,
+    "device": 0,
+    "_note": "Lugalay's eyes: when you ask him to look at something, one webcam frame is captured and handed to the brain, which reads the image itself. Nothing is streamed and nothing is kept but the last frame. device 0 is the built-in camera; raise it for an external one."
+  }
 }

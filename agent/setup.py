@@ -16,11 +16,15 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-HOME = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 import bus  # noqa: E402
 
-TEMPLATES = os.path.join(HERE, "templates")
+# bus knows the difference between the code and the writable side. Taking HOME
+# from the file's own location put CLAUDE.md and profile.md *inside the app
+# bundle* in a packaged build — read-only, and never read again — so the
+# installed Lugalay came up with no personality and no memory at all.
+HOME = bus.HOME
+TEMPLATES = bus.resource("templates")
 
 
 def detect_name():
@@ -37,7 +41,9 @@ def detect_name():
 
     for cmd in cmds:
         try:
-            out = subprocess.run(cmd, capture_output=True, text=True, timeout=5).stdout
+            out = subprocess.run(cmd, capture_output=True, text=True,
+                                 encoding="utf-8", errors="replace",
+                                 timeout=5).stdout
         except (OSError, subprocess.SubprocessError):
             continue
         if cmd[0] == "getent":
@@ -58,7 +64,12 @@ def render(user, agent="Lugalay", agent_my="လူကလေး"):
     """
     written = []
     jobs = [("CLAUDE.md.tmpl", os.path.join(HOME, "CLAUDE.md")),
-            ("profile.md.tmpl", os.path.join(HOME, "memory", "profile.md"))]
+            ("profile.md.tmpl", os.path.join(HOME, "memory", "profile.md")),
+            # Without this the installed Lugalay has no allowlist at all, and a
+            # spoken session cannot approve anything — so he could not even
+            # write to his own memory, and every request to do something ended
+            # in a refusal nobody could grant.
+            ("settings.json.tmpl", os.path.join(HOME, ".claude", "settings.json"))]
     for tmpl, dest in jobs:
         src = os.path.join(TEMPLATES, tmpl)
         if not os.path.isfile(src):
@@ -107,8 +118,7 @@ def apply(answers):
             pass
     cfg["setup_done"] = True
 
-    with open(bus.CONFIG, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, indent=2, ensure_ascii=False)
+    bus.save_config(cfg)
 
     files = render(user, agent)
     return {"user": user, "agent": agent, "listen_language": listen_lang,

@@ -18,6 +18,6 @@
   <key>NSMicrophoneUsageDescription</key>
   <string>Lugalay listens to you so it can answer out loud.</string>
   <key>NSCameraUsageDescription</key>
-  <string>Lugalay uses the camera only for the hand-tracking board.</string>
+  <string>Lugalay uses the camera to track your hands on the board, and to take a single photo when you ask it to look at something. Nothing is streamed or recorded.</string>
 </dict>
 </plist>

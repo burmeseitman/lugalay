@@ -13,7 +13,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 LOGDIR = os.path.join(os.path.dirname(HERE), "logs")
 os.makedirs(LOGDIR, exist_ok=True)
 LOG = os.path.join(LOGDIR, "langtest.log")
-out = open(LOG, "w")
+out = open(LOG, "w", encoding="utf-8", errors="replace")
 def say(m=""):
     print(m, flush=True); out.write(m + "\n"); out.flush()
 

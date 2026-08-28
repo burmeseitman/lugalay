@@ -1,14 +1,13 @@
 {
+  "_note": "Lugalay's permissions. A spoken session cannot show an approval prompt, so anything not listed here simply fails and he says so out loud. Add one precise rule when he needs a new ability — never Bash(*), and never set brain.permission_mode to 'auto', which ignores this file entirely.",
   "permissions": {
     "allow": [
       "Read(**)",
       "Edit(memory/**)",
       "Write(memory/**)",
       "Edit(agent/config.json)",
-      "Bash(python3 agent/hands/present.py:*)",
-      "Bash(python3 agent/eyes/look.py:*)",
       "Bash(curl -s -X POST http://127.0.0.1:7318/open:*)",
-      "Bash(./agent/voice/run.sh --check)",
+      "Bash(curl -s -X POST http://127.0.0.1:7318/board:*)",
       "WebSearch"
     ],
     "deny": [

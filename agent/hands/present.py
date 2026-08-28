@@ -27,7 +27,7 @@ def get():
             return json.load(r), True
     except Exception:
         try:
-            with open(BOARD) as f:
+            with open(BOARD, encoding="utf-8") as f:
                 return json.load(f), False
         except (OSError, ValueError):
             return {"cards": []}, False
@@ -41,7 +41,7 @@ def put(d, live):
         with urllib.request.urlopen(req, timeout=3):
             return
     os.makedirs(os.path.dirname(BOARD), exist_ok=True)
-    with open(BOARD, "w") as f:
+    with open(BOARD, "w", encoding="utf-8") as f:
         json.dump(d, f, indent=2)
 
 

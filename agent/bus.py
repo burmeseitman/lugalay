@@ -4,7 +4,7 @@ The voice writes a small JSON file; the face and hands read it. That is all.
 No sockets, no broker, no framework — a file that any of them can survive
 the others not existing.
 """
-import json, os, sys, tempfile, time
+import json, os, sys, tempfile, time, urllib.parse
 
 # ── where things live ─────────────────────────────────────────────────────
 # Running from a checkout, everything sits together in the repo. Packaged,
@@ -41,6 +41,74 @@ def ensure_home():
         os.makedirs(d, exist_ok=True)
     return HOME
 
+# ── who is allowed to talk to the local servers ───────────────────────────
+# Both servers listen on the loopback address, which sounds private but is not:
+# every page in the person's browser can reach 127.0.0.1 too. Without a check
+# here, any website he visited could POST to /open and put a page of its own
+# choosing on his screen, or to /look and take a photo with his webcam.
+#
+# Browsers label their own requests. Sec-Fetch-Site says where a request came
+# from and is sent on everything, including <img> and <script>; Origin is sent
+# on POSTs and on cross-origin fetches. A page on the internet therefore
+# announces itself and can be turned away. Things that are not browsers —
+# curl, urllib, Lugalay's own tools — send neither header, and those are the
+# callers these servers exist to serve.
+LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1", "[::1]")
+
+
+def local_request(headers, port):
+    """True if this request may be acted on. False for anything cross-site."""
+    # 1. Host must still be us. A name that resolves to 127.0.0.1 — the DNS
+    #    rebinding trick — arrives with the attacker's hostname in this header.
+    host = (headers.get("Host") or "").strip()
+    if host:
+        try:
+            hostname = urllib.parse.urlsplit("//" + host).hostname
+        except ValueError:
+            return False
+        if hostname not in LOCAL_HOSTS:
+            return False
+
+    # 2. A browser telling us it came from somewhere else is telling the truth.
+    site = (headers.get("Sec-Fetch-Site") or "").strip().lower()
+    if site and site not in ("same-origin", "none"):
+        return False
+
+    # 3. And if it named an origin, that origin has to be this very server.
+    origin = (headers.get("Origin") or "").strip()
+    if origin and origin.lower() != "null":
+        try:
+            u = urllib.parse.urlsplit(origin)
+        except ValueError:
+            return False
+        if u.hostname not in LOCAL_HOSTS:
+            return False
+        if (u.port or (443 if u.scheme == "https" else 80)) != port:
+            return False
+    return True
+
+
+def save_config(cfg):
+    """Write config.json without ever leaving it half-written.
+
+    It holds the person's name, his settings and his API key, and both the
+    settings page and the voice loop write it. A plain open(w) truncates first,
+    so a crash or a second writer arriving mid-write loses the lot.
+    """
+    ensure_home()
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(CONFIG), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2, ensure_ascii=False)
+        # the API key lives in here; nobody else on the machine needs to read it
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, CONFIG)
+    except BaseException:
+        os.path.exists(tmp) and os.unlink(tmp)
+        raise
+    return cfg
+
+
 VALID = ("idle", "listening", "thinking", "speaking", "error")
 
 
@@ -66,7 +134,7 @@ def config():
 
 def read():
     try:
-        with open(BUS) as f:
+        with open(BUS, encoding="utf-8") as f:
             return json.load(f)
     except (OSError, ValueError):
         return {"state": "idle", "text": "", "level": 0.0, "ts": time.time()}
@@ -82,7 +150,7 @@ def write(state, text="", level=0.0):
                "ts": time.time()}
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(BUS), suffix=".tmp")
     try:
-        with os.fdopen(fd, "w") as f:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(payload, f)
         os.replace(tmp, BUS)
     except BaseException:
@@ -102,7 +170,7 @@ def faces():
 def face_id():
     """The persona currently selected, falling back to the configured default."""
     try:
-        with open(FACE) as f:
+        with open(FACE, encoding="utf-8") as f:
             wanted = json.load(f).get("id")
     except (OSError, ValueError):
         wanted = None
@@ -127,7 +195,7 @@ def set_face(fid):
         raise ValueError(f"unknown face {fid!r}")
     os.makedirs(os.path.dirname(FACE), exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(FACE), suffix=".tmp")
-    with os.fdopen(fd, "w") as f:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump({"id": fid, "ts": time.time()}, f)
     os.replace(tmp, FACE)
     return fid

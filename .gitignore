@@ -34,3 +34,6 @@ packaging/icon.icns
 packaging/icon.ico
 packaging/icon.png
 packaging/*.iconset/
+
+# generated at runtime
+agent/eyes/frames/

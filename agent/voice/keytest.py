@@ -9,7 +9,7 @@ import ctypes, ctypes.util, os, sys, time, collections
 HERE = os.path.dirname(os.path.abspath(__file__))
 LOG = os.path.join(os.path.dirname(HERE), "logs", "keytest.log")
 os.makedirs(os.path.dirname(LOG), exist_ok=True)
-out = open(LOG, "w")
+out = open(LOG, "w", encoding="utf-8", errors="replace")
 
 
 def say(m=""):

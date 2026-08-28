@@ -26,14 +26,19 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path.split("?")[0]
+        if not bus.local_request(self.headers, PORT):
+            return self._send(403, json.dumps({"error": "cross-site request refused"}))
         if path == "/state":
             return self._send(200, json.dumps(bus.read()))
         if path == "/config":
+            # read it fresh: CFG is a snapshot from start-up, so after the
+            # settings page saved a new name this went on serving the old one
+            live = bus.config()
             return self._send(200, json.dumps({
-                "name": CFG.get("name", "Agent"),
+                "name": live.get("name", "Agent"),
                 "face": bus.face_id(),
                 "faces": bus.faces(),
-                "overlay": bool(CFG.get("window", {}).get("overlay", False)),
+                "overlay": bool(live.get("window", {}).get("overlay", False)),
             }))
         if path == "/settings":
             cfg = bus.config()
@@ -43,8 +48,10 @@ class Handler(BaseHTTPRequestHandler):
             if raw_key:
                 if raw_key.startswith("sk-"):
                     provider = "OpenAI TTS (tts-1)"
-                elif raw_key.startswith("AIzaSy"):
-                    provider = "Google Cloud TTS"
+                elif raw_key.startswith("AIzaSy") or raw_key.startswith("AQ."):
+                    # AI Studio has started issuing AQ.… keys; both formats
+                    # authenticate to Gemini TTS the same way
+                    provider = "Google Gemini TTS"
                 else:
                     provider = "ElevenLabs Multilingual v2"
                 masked = ("•" * 16) + (raw_key[-4:] if len(raw_key) > 4 else "")
@@ -68,7 +75,7 @@ class Handler(BaseHTTPRequestHandler):
             import setup as setup_mod
             return self._send(200, json.dumps({
                 "detected": setup_mod.detect_name(),
-                "agent": CFG.get("name", "Lugalay"),
+                "agent": cfg.get("name", "Lugalay"),
                 "faces": bus.faces(),
             }))
         if path in ("/setup", "/setup.html"):
@@ -81,9 +88,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = self.path.split("?")[0]
+        if not bus.local_request(self.headers, PORT):
+            return self._send(403, json.dumps({"error": "cross-site request refused"}))
         if path == "/setup":
             import setup as setup_mod
-            n = int(self.headers.get("Content-Length", 0))
+            n = min(int(self.headers.get("Content-Length", 0) or 0), 64 * 1024)
             try:
                 answers = json.loads(self.rfile.read(n))
                 result = setup_mod.apply(answers)
@@ -92,14 +101,18 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, json.dumps(result, ensure_ascii=False))
 
         if path == "/settings":
-            n = int(self.headers.get("Content-Length", 0))
+            n = min(int(self.headers.get("Content-Length", 0) or 0), 64 * 1024)
             try:
                 data = json.loads(self.rfile.read(n))
                 cfg = bus.config()
-                if "user" in data and data["user"].strip():
-                    cfg["user"] = data["user"].strip()
-                if "agent" in data and data["agent"].strip():
-                    cfg["name"] = data["agent"].strip()
+                # names go into prompts and onto the screen; a megabyte of
+                # them helps nobody and bloats every turn the brain takes
+                def name(v):
+                    return str(v).strip()[:60]
+                if "user" in data and name(data["user"]):
+                    cfg["user"] = name(data["user"])
+                if "agent" in data and name(data["agent"]):
+                    cfg["name"] = name(data["agent"])
                 if "listen_language" in data and data["listen_language"]:
                     cfg.setdefault("language", {})["listen"] = data["listen_language"]
                 if "speak_language" in data and data["speak_language"]:
@@ -112,8 +125,7 @@ class Handler(BaseHTTPRequestHandler):
                     new_key = data["api_key"].strip()
                     if not new_key.startswith("•"):
                         cfg.setdefault("tts", {})["api_key"] = new_key
-                with open(bus.CONFIG, "w", encoding="utf-8") as f:
-                    json.dump(cfg, f, indent=2, ensure_ascii=False)
+                bus.save_config(cfg)
                 return self._send(200, json.dumps({"ok": True, "face": bus.face_id()}))
             except Exception as e:
                 return self._send(400, json.dumps({"error": str(e)}))

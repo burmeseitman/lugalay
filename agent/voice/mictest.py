@@ -13,7 +13,7 @@ import numpy as np, sounddevice as sd
 HERE = os.path.dirname(os.path.abspath(__file__))
 LOG = os.path.join(os.path.dirname(HERE), "logs", "mictest.log")
 os.makedirs(os.path.dirname(LOG), exist_ok=True)
-out = open(LOG, "w")
+out = open(LOG, "w", encoding="utf-8", errors="replace")
 
 def say(m=""):
     print(m, flush=True); out.write(m + "\n"); out.flush()

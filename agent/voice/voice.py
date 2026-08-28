@@ -21,6 +21,17 @@ AGENT = os.path.dirname(HERE)
 sys.path.insert(0, AGENT)
 import bus  # noqa: E402
 
+try:
+    from eyes import look  # noqa: E402
+except Exception:                      # no opencv, or a build without eyes
+    look = None
+
+try:
+    sys.path.insert(0, os.path.join(AGENT, "voice"))
+    import tools as local_tools  # noqa: E402
+except Exception:                      # a build without them still talks
+    local_tools = None
+
 # bus decides where things live: alongside the code in a checkout, in the
 # user's own directory when this is running from a packaged app.
 HOME = bus.HOME
@@ -48,7 +59,9 @@ class Brain:
                "rather than stiff formal written register (avoid ဖြစ်ပါသည်၊ ဆောင်ရွက်ပါမည်). "
                "Keep sentences relatively short (2-3 concise sentences) and use natural "
                "Burmese punctuation (၊ and ။) so speech rhythm sounds lively and human. "
-               "Keep English technical terms or brand names in clean Latin characters inside the sentence."),
+               "Write English words, technical terms and acronyms in Burmese script, spelled "
+               "the way they are pronounced (ဘက်ထရီ, စကရင်, အေအိုင်) — the whole reply is read "
+               "by one Burmese voice, which mispronounces Latin letters."),
         "en": "Reply in English.",
     }
 
@@ -59,6 +72,14 @@ class Brain:
         self.session_id = None
         self.history = []          # only used by the local model
 
+    # Where `claude` actually gets installed. A GUI app launched from Finder
+    # inherits almost no PATH — not the shell's, just /usr/bin:/bin and friends —
+    # so the packaged build could not find the brain that a terminal run finds
+    # instantly, and silently dropped to the local model instead.
+    BRAIN_PATHS = ("~/.local/bin", "~/.npm-global/bin", "~/.bun/bin",
+                   "~/.volta/bin", "~/n/bin", "/opt/homebrew/bin",
+                   "/usr/local/bin", "~/AppData/Roaming/npm")
+
     @staticmethod
     def _env():
         """A spawned claude must not think it is a nested agent run."""
@@ -66,6 +87,13 @@ class Brain:
         for k in ("CLAUDE_CODE_ENTRYPOINT", "CLAUDE_AGENT_SDK_VERSION",
                   "CLAUDE_CODE_OAUTH_SCOPES", "CLAUDECODE"):
             env.pop(k, None)
+
+        sep = os.pathsep
+        have = env.get("PATH", "").split(sep)
+        extra = [d for d in (os.path.expanduser(p) for p in Brain.BRAIN_PATHS)
+                 if os.path.isdir(d) and d not in have]
+        if extra:
+            env["PATH"] = sep.join(have + extra)
         return env
 
     # ── local fallback: any local model server ─────────────────────────
@@ -84,10 +112,62 @@ class Brain:
          "probe": "/v1/models"},
     ]
 
+    @staticmethod
+    def spoken_style(lang):
+        """How to speak this language, from a file so it can be tuned live.
+
+        The prompt is the one knob that decides whether Burmese comes out
+        sounding like a person or like a textbook, and it needs trying and
+        retrying against a real voice. Keeping it in a file means a change
+        lands on the very next sentence instead of at the next rebuild.
+
+        A copy under the writable root beats the one that ships, so a packaged
+        install can still be tuned.
+        """
+        name = {"my": "spoken_burmese.md", "en": "spoken_english.md"}.get(lang)
+        if not name:
+            return None
+        override = bus.config().get("language", {}).get(f"{lang}_prompt_file")
+        for path in ([override] if override else []) + [
+                os.path.join(bus.ROOT, "voice", "prompts", name),
+                bus.resource("voice", "prompts", name)]:
+            try:
+                with open(os.path.expanduser(path), encoding="utf-8") as f:
+                    body = f.read()
+            except OSError:
+                continue
+            # everything above the first --- is a note to whoever edits the
+            # file; the model should never see it
+            if "\n---\n" in body:
+                body = body.split("\n---\n", 1)[1]
+            body = body.strip()
+            if body:
+                return body
+        return None
+
+    @staticmethod
+    def now_note():
+        """The clock. Claude is told today's date and nothing else, so asked the
+        time it either guessed or said it could not know — and a personal
+        assistant that cannot tell you the time is a strange thing to own."""
+        t = time.localtime()
+        tz = time.strftime("%Z", t) or ""
+        off = time.strftime("%z", t)
+        off = f"UTC{off[:3]}:{off[3:]}" if off else ""
+        return ("Right now it is " + time.strftime("%A %d %B %Y, %H:%M", t)
+                + f" local time ({tz} {off})".rstrip() + ". "
+                "Use this when the time or the date matters — do not say you "
+                "have no way of knowing it.")
+
+    @classmethod
+    def style(cls, lang):
+        """The speaking instructions for `lang`, file first, built-in second."""
+        return cls.spoken_style(lang) or cls.LANG.get(lang, cls.LANG["my"])
+
     def _local_system(self, lang):
         """A local model has no tools, so who Lugalay is has to be handed to
         it directly instead of being read off disk."""
-        parts = [self.LANG.get(lang or self.lang, self.LANG["my"])]
+        parts = [self.style(lang or self.lang), self.now_note()]
         cfg = bus.config()
         parts.append(f"You are {cfg.get('name', 'the assistant')}, "
                      f"{cfg.get('user', 'the user')}'s personal assistant. Warm, "
@@ -95,12 +175,46 @@ class Brain:
                      "answer in two or three short sentences of natural conversational "
                      "prose. Never output markdown formatting, lists, bullet points, "
                      "code blocks, or URLs.")
+        if local_tools:
+            parts.append(
+                "You have tools. Use read_memory before answering anything that "
+                "refers to an earlier conversation, and remember when he tells you "
+                "something durable — a preference, a decision, a fact about his "
+                "work. open_page puts a web page on his screen; show_card puts "
+                "text on his board instead of reading a long list aloud. Call a "
+                "tool when it is the right thing to do and then answer normally; "
+                "never describe the call out loud.")
         try:
-            with open(os.path.join(HOME, "memory", "profile.md")) as f:
+            with open(os.path.join(HOME, "memory", "profile.md"),
+                      encoding="utf-8") as f:
                 parts.append("What you know about them:\n" + f.read()[:1600])
         except OSError:
             pass
         return "\n\n".join(parts)
+
+    @staticmethod
+    def _pick_model(models, wanted):
+        """Choose a model that is actually installed.
+
+        The configured name used to be taken on trust, so deleting a model left
+        the fallback calling something Ollama no longer had — it answered
+        "model not found" and the local brain was silently dead, at exactly the
+        moment it was needed. Prefer what is asked for, settle for what exists.
+        """
+        names = [m.get("name") for m in models if m.get("name")]
+        if not names:
+            return None
+        if wanted in names:
+            return wanted
+        # a cloud-hosted entry is no use as an offline fallback, and the
+        # smallest of the rest is the one most likely to fit in memory
+        local = [m for m in models if not str(m.get("name","")).endswith(":cloud")]
+        pool = local or models
+        pick = min(pool, key=lambda m: m.get("size", 0)).get("name")
+        if wanted:
+            log("brain", f"{C['am']}{wanted} is not installed; "
+                         f"using {pick} instead{C['x']}", "am")
+        return pick
 
     def _discover_local(self):
         """Find the first local model server that is running.
@@ -118,8 +232,10 @@ class Brain:
             try:
                 with urllib.request.urlopen(pinned + "/api/tags", timeout=2) as r:
                     models = json.loads(r.read()).get("models", [])
-                    model = o.get("model", models[0]["name"] if models else "qwen3:8b")
-                    return {"name": "ollama", "url": pinned, "api": "ollama"}, model
+                    model = self._pick_model(models, o.get("model"))
+                    if model:
+                        return {"name": "ollama", "url": pinned,
+                                "api": "ollama"}, model
             except Exception:
                 pass
 
@@ -131,7 +247,10 @@ class Brain:
                     body = json.loads(r.read())
                     if be["api"] == "ollama":
                         names = [m["name"] for m in body.get("models", [])]
-                        model = o.get("model", names[0] if names else "qwen3:8b")
+                        model = self._pick_model(body.get("models", []),
+                                                 o.get("model"))
+                        if not model:
+                            continue
                     else:
                         names = [m["id"] for m in body.get("data", [])]
                         model = names[0] if names else "default"
@@ -141,6 +260,96 @@ class Brain:
             except Exception:
                 continue
         return None, None
+
+    MAX_TOOL_ROUNDS = 4
+
+    def _split_first_sentence(self, answer):
+        """Yield (opening sentence, True) and (rest, False), so the mouth can
+        start speaking while the tail is still being rendered by the voice."""
+        m = SENT_END.search(answer)
+        if m and m.end() >= 12 and m.end() < len(answer):
+            yield answer[:m.end()].strip(), True
+            yield answer[m.end():].strip(), False
+        else:
+            yield answer, True
+
+    def _remote_tool_round(self, url, model, key, text, lang):
+        """Same idea as _tool_round but for an OpenAI-compatible endpoint."""
+        import urllib.request
+        self.history.append({"role": "user", "content": text})
+        messages = [{"role": "system", "content": self._local_system(lang)}] \
+                   + self.history[-8:]
+        headers = {"Content-Type": "application/json",
+                   "Authorization": f"Bearer {key}"}
+        endpoint = url.rstrip("/") + "/v1/chat/completions"
+        for _ in range(self.MAX_TOOL_ROUNDS):
+            payload = {"model": model, "messages": messages, "stream": False,
+                       "tools": local_tools.SCHEMAS, "temperature": 0.7,
+                       "max_tokens": int(self.cfg.get("ollama", {}).get("max_tokens", 220))}
+            req = urllib.request.Request(
+                endpoint, data=json.dumps(payload).encode(),
+                headers=headers, method="POST")
+            with urllib.request.urlopen(
+                    req, timeout=self.cfg.get("timeout_seconds", 180)) as r:
+                d = json.loads(r.read())
+            msg = ((d.get("choices") or [{}])[0].get("message")) or {}
+            calls = msg.get("tool_calls") or []
+            if not calls:
+                answer = (msg.get("content") or "").strip()
+                if answer:
+                    self.history.append({"role": "assistant", "content": answer})
+                return answer
+            messages.append(msg)
+            for c in calls:
+                fn = (c.get("function") or {})
+                name = fn.get("name", "")
+                out = local_tools.run(name, fn.get("arguments"))
+                log("brain", f"{C['dim']}tool {name} -> {out[:60]}{C['x']}", "dim")
+                messages.append({"role": "tool", "tool_call_id": c.get("id", ""),
+                                 "name": name, "content": out})
+        return None
+
+    def _tool_round(self, url, model, o, messages):
+        """Let a local model use tools, then hand back what it finally said.
+
+        Claude comes with its own tools; a local model comes with none, so the
+        offline brain could only talk — it could not read what it had been told
+        last week or write down what it had just learned. Ollama and every
+        OpenAI-compatible server take the same `tools` schema and answer with
+        `tool_calls`, so one loop serves both.
+
+        Runs unstreamed: a tool round has nothing to say out loud, and the
+        answer is split into sentences downstream anyway.
+        """
+        import urllib.request
+        if not local_tools:
+            return None
+        for _ in range(self.MAX_TOOL_ROUNDS):
+            payload = {"model": model, "messages": messages, "stream": False,
+                       "think": bool(o.get("think", False)),
+                       "keep_alive": o.get("keep_alive", "30m"),
+                       "tools": local_tools.SCHEMAS,
+                       "options": {"temperature": 0.7,
+                                   "num_predict": int(o.get("max_tokens", 220))}}
+            req = urllib.request.Request(
+                url, data=json.dumps(payload).encode(),
+                headers={"Content-Type": "application/json"}, method="POST")
+            with urllib.request.urlopen(
+                    req, timeout=self.cfg.get("timeout_seconds", 180)) as r:
+                d = json.loads(r.read())
+            msg = d.get("message") or {}
+            calls = msg.get("tool_calls") or []
+            if not calls:
+                return (msg.get("content") or "").strip()
+            messages.append(msg)
+            for c in calls:
+                fn = (c.get("function") or {})
+                name = fn.get("name", "")
+                out = local_tools.run(name, fn.get("arguments"))
+                log("brain", f"{C['dim']}tool {name} -> {out[:60]}{C['x']}", "dim")
+                messages.append({"role": "tool", "name": name, "content": out})
+        # it kept reaching for tools and never answered
+        return None
 
     def _ollama_stream(self, text, lang=None):
         """Yield (piece, is_first) from a local Ollama model."""
@@ -154,12 +363,38 @@ class Brain:
                         + self.history[-8:],
             "stream": True,
             "think": bool(o.get("think", False)),
+            # Ollama drops the model out of memory five minutes after the last
+            # request. In a spoken conversation that is a normal gap between
+            # questions, and reloading 5GB off disk cost a measured 4-9 seconds
+            # before a single token appeared — the whole reason offline mode
+            # felt slow. Hold it resident instead.
+            "keep_alive": o.get("keep_alive", "30m"),
             "options": {"temperature": 0.7,
                         "num_predict": int(o.get("max_tokens", 220))},
         }
         req = urllib.request.Request(
             url, data=json.dumps(payload).encode(),
             headers={"Content-Type": "application/json"}, method="POST")
+
+        # Give it its tools first. If it wants none, this is one extra call and
+        # the answer comes back whole; if it wants some, this is the only way
+        # it ever gets to use them.
+        answer = None
+        try:
+            answer = self._tool_round(url, payload["model"], o,
+                                      list(payload["messages"]))
+        except Exception as e:
+            log("brain", f"{C['am']}tools unavailable ({e}); "
+                         f"answering without them{C['x']}", "am")
+        if answer:
+            self.history.append({"role": "assistant", "content": answer})
+            m = SENT_END.search(answer)
+            if m and m.end() >= 12 and m.end() < len(answer):
+                yield answer[:m.end()].strip(), True
+                yield answer[m.end():].strip(), False
+            else:
+                yield answer, True
+            return
 
         buf, sent_first, full = "", False, ""
         with urllib.request.urlopen(req, timeout=self.cfg.get("timeout_seconds", 180)) as r:
@@ -190,10 +425,60 @@ class Brain:
             yield "I do not have anything to say to that.", True
         self.history.append({"role": "assistant", "content": full.strip()})
 
+    # A handful of the common providers keyed by short name, so a config
+    # only has to name them rather than remember their URLs.
+    REMOTE_PRESETS = {
+        "openai":     {"url": "https://api.openai.com",           "model": "gpt-4o-mini"},
+        "groq":       {"url": "https://api.groq.com/openai",      "model": "llama-3.3-70b-versatile"},
+        "together":   {"url": "https://api.together.xyz",         "model": "meta-llama/Llama-3.3-70B-Instruct-Turbo"},
+        "openrouter": {"url": "https://openrouter.ai/api",        "model": "openai/gpt-4o-mini"},
+        "deepseek":   {"url": "https://api.deepseek.com",         "model": "deepseek-chat"},
+    }
+
+    def _remote_stream(self, text, lang=None):
+        """Route to a hosted OpenAI-compatible service using the same code
+        path as the local one. Named for clarity in the log."""
+        engine = self.cfg.get("engine", "openai")
+        r = dict(self.REMOTE_PRESETS.get(engine, {}))
+        r.update({k: v for k, v in (self.cfg.get("remote") or {}).items() if v})
+        url   = r.get("url")
+        model = r.get("model")
+        key   = r.get("api_key") or os.environ.get("OPENAI_API_KEY", "")
+        if not url or not model:
+            yield ("I have no remote model configured — set brain.remote.url "
+                   "and brain.remote.model in the config."), True
+            return
+        if not key:
+            yield ("I have no key for the remote model. Put it in "
+                   "brain.remote.api_key or the OPENAI_API_KEY environment."), True
+            return
+        try:
+            if local_tools:
+                answer = self._remote_tool_round(url, model, key, text, lang)
+                if answer:
+                    for piece in self._split_first_sentence(answer):
+                        yield piece
+                    return
+            yield from self._openai_stream(text, lang, url=url, model=model,
+                                           api_key=key)
+        except Exception as e:
+            log("brain", f"{C['am']}remote failed ({e}); "
+                         f"falling back to local model{C['x']}", "am")
+            if self.local_available():
+                yield from self._local_stream(text, lang)
+            else:
+                yield f"The remote model refused: {e}", True
+
     def _openai_stream(self, text, lang=None, url="http://127.0.0.1:1234",
-                       model="default"):
-        """Yield (piece, is_first) from any OpenAI-compatible local server
-        (LM Studio, Jan, LocalAI, llama.cpp, text-generation-webui, etc.)."""
+                       model="default", api_key=None):
+        """Yield (piece, is_first) from anything speaking OpenAI's chat API.
+
+        The same wire format serves LM Studio, Jan, LocalAI, llama.cpp on one
+        end and OpenAI, Groq, Together, DeepSeek, OpenRouter on the other. The
+        only thing a hosted service adds is an Authorization header; supply an
+        api_key and it goes out, leave it None and the request is anonymous the
+        way a local server expects.
+        """
         import urllib.request
         endpoint = url.rstrip("/") + "/v1/chat/completions"
         self.history.append({"role": "user", "content": text})
@@ -205,9 +490,12 @@ class Brain:
             "temperature": 0.7,
             "max_tokens": int(self.cfg.get("ollama", {}).get("max_tokens", 220)),
         }
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
         req = urllib.request.Request(
             endpoint, data=json.dumps(payload).encode(),
-            headers={"Content-Type": "application/json"}, method="POST")
+            headers=headers, method="POST")
 
         buf, sent_first, full = "", False, ""
         with urllib.request.urlopen(req, timeout=self.cfg.get("timeout_seconds", 180)) as r:
@@ -267,6 +555,48 @@ class Brain:
         except Exception:
             return False
 
+    def warm_local(self):
+        """Load the local model into memory now, in the background.
+
+        Ollama loads a model on first use, not on start, so the first question
+        of a session paid the whole 4-9s read off disk before anything came
+        back. Nothing depends on this finishing — if it fails, the first reply
+        is simply as slow as it used to be.
+        """
+        o = self.cfg.get("ollama", {})
+        if self.cfg.get("engine") not in ("ollama", "lmstudio", "local"):
+            return
+        def go():
+            import urllib.request
+            try:
+                # Send the real system prompt, not an empty request. Loading the
+                # weights is only half the cold cost — the other half is reading
+                # the ~1500-token system prompt, and doing it here leaves it in
+                # the KV cache so his first question reuses it instead of paying
+                # for it again.
+                body = json.dumps({
+                    "model": o.get("model", "qwen3:8b"),
+                    "messages": [{"role": "system",
+                                  "content": self._local_system(self.lang)},
+                                 {"role": "user", "content": "hi"}],
+                    "stream": False,
+                    "think": bool(o.get("think", False)),
+                    "keep_alive": o.get("keep_alive", "30m"),
+                    "options": {"num_predict": 1},
+                }).encode()
+                req = urllib.request.Request(
+                    o.get("url", "http://127.0.0.1:11434") + "/api/chat",
+                    data=body, headers={"Content-Type": "application/json"},
+                    method="POST")
+                t0 = time.time()
+                with urllib.request.urlopen(req, timeout=180):
+                    pass
+                log("brain", f"{C['dim']}local model warm "
+                             f"({time.time()-t0:.1f}s){C['x']}", "dim")
+            except Exception:
+                pass
+        threading.Thread(target=go, daemon=True).start()
+
     def local_available(self):
         """Is any local model server reachable?"""
         be, _ = self._discover_local()
@@ -292,15 +622,23 @@ class Brain:
             return
 
         engine = self.cfg.get("engine", "claude")
+        if engine in ("openai", "remote", "groq", "together", "openrouter",
+                      "deepseek"):
+            yield from self._remote_stream(text, lang)
+            return
         if engine in ("ollama", "lmstudio", "local"):
             yield from self._local_stream(text, lang)
             return
 
         cmd = self._cmd(text, lang, streaming=True)
         try:
+            # text=True alone decodes with the locale encoding, which on
+            # Windows is cp1252 and cannot represent a word of Burmese — the
+            # reply would arrive as a UnicodeDecodeError instead of speech.
             proc = subprocess.Popen(cmd, cwd=HOME, env=self._env(),
                                     stdout=subprocess.PIPE,
-                                    stderr=subprocess.DEVNULL, text=True)
+                                    stderr=subprocess.DEVNULL, text=True,
+                                    encoding="utf-8", errors="replace")
         except FileNotFoundError:
             if (self.cfg.get("engine") in ("auto", "claude", "local")
                     and self.local_available()):
@@ -361,6 +699,11 @@ class Brain:
             return f"You said: {text}"
 
         engine = self.cfg.get("engine", "claude")
+        if engine in ("openai", "remote", "groq", "together", "openrouter",
+                      "deepseek"):
+            parts = list(self._remote_stream(text, lang))
+            return " ".join(p for p, _ in parts).strip() or \
+                   "I do not have anything to say to that."
         if engine in ("ollama", "lmstudio", "local"):
             parts = list(self._local_stream(text, lang))
             return " ".join(p for p, _ in parts).strip() or \
@@ -369,7 +712,8 @@ class Brain:
         cmd = self._cmd(text, lang)
         try:
             p = subprocess.run(cmd, cwd=HOME, env=self._env(), capture_output=True,
-                               text=True, timeout=self.cfg.get("timeout_seconds", 180))
+                               text=True, encoding="utf-8", errors="replace",
+                               timeout=self.cfg.get("timeout_seconds", 180))
         except subprocess.TimeoutExpired:
             return "Sorry, that took too long and I gave up on it."
         except FileNotFoundError:
@@ -394,7 +738,7 @@ class Brain:
                # CLAUDE.md carries the same rules, but this flag lands later and
                # wins — leaving language out of it made the reply language drift
                # to whatever the question was asked in.
-               self.LANG.get(lang or self.lang, self.LANG["my"]) + " "
+               self.style(lang or self.lang) + "\n\n" + self.now_note() + "\n\n"
                "This is a SPOKEN conversation. Answer in two or three sentences of "
                "plain prose. No markdown, no lists, no code blocks, no URLs — every "
                "one of those sounds like noise when read aloud. If the answer truly "
@@ -802,6 +1146,13 @@ class Transcriber:
 
 
 # ──────────────────────────────── the mouth ──────────────────────────────
+# How long one piece of speech may take to come back from the network before we
+# give up on it and let the OS voice say it instead. Generous — a slow line is
+# still better than the system voice — but finite.
+SYNTH_TIMEOUT = 20
+# How many times to ask for one piece of speech before giving up on it.
+SYNTH_TRIES = 3
+
 SENT = re.compile(r"(?<=[.!?…။၊])\s+|(?<=[။၊])")
 MYANMAR = re.compile(r"[\u1000-\u109F\uAA60-\uAA7F]")
 SENT_END = re.compile(r"[.!?…။]")
@@ -813,12 +1164,61 @@ def is_burmese(text):
     return bool(MYANMAR.search(text))
 
 
+_TERMS_CACHE = {"mtime": None, "path": None, "pairs": []}
+
+
+def burmese_terms():
+    """English → Burmese-script pairs, longest first, re-read when the file changes.
+
+    Asking the model to transliterate turned out to be unreliable — it ignores
+    the instruction about half the time and invents bad spellings the other
+    half. This table is the guarantee behind that request.
+    """
+    for path in (os.path.join(bus.ROOT, "voice", "prompts", "burmese_terms.txt"),
+                 bus.resource("voice", "prompts", "burmese_terms.txt")):
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            continue
+        if _TERMS_CACHE["path"] == path and _TERMS_CACHE["mtime"] == mtime:
+            return _TERMS_CACHE["pairs"]
+        pairs = []
+        try:
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.split("#", 1)[0].strip()
+                    if "=" not in line:
+                        continue
+                    en, my = (p.strip() for p in line.split("=", 1))
+                    if en and my:
+                        pairs.append((en, my))
+        except OSError:
+            continue
+        # longest first so "machine learning" is taken before "machine"
+        pairs.sort(key=lambda p: len(p[0]), reverse=True)
+        _TERMS_CACHE.update(path=path, mtime=mtime, pairs=pairs)
+        return pairs
+    return []
+
+
+def transliterate_terms(text):
+    """Swap known English words for how they are actually said in Burmese."""
+    for en, my in burmese_terms():
+        # \b does not fit words with hyphens in them, so bound on non-letters
+        text = re.sub(rf"(?<![A-Za-z]){re.escape(en)}(?![A-Za-z])", my, text,
+                      flags=re.IGNORECASE)
+    return text
+
+
 def format_burmese_for_speech(text):
     """Format Burmese text specifically for natural neural TTS prosody.
     Adds breathing spaces around English loanwords, inserts natural pauses,
     and ensures proper sentence-ending cadence."""
     if not text:
         return ""
+    # 0. Say English words the Burmese way. Must come first: everything below
+    #    keys off which script a character is in.
+    text = transliterate_terms(text)
     # 1. Add breathing spaces around Latin/English words inside Burmese text
     text = re.sub(r"([a-zA-Z0-9]+)([\u1000-\u109F\uAA60-\uAA7F])", r"\1 \2", text)
     text = re.sub(r"([\u1000-\u109F\uAA60-\uAA7F])([a-zA-Z0-9]+)", r"\1 \2", text)
@@ -861,6 +1261,10 @@ def clean_spoken_text(text):
     # Strip emojis and unicode symbols
     text = re.sub(r"[\U00010000-\U0010ffff]", "", text)
     text = re.sub(r"[\u2600-\u27ff]", "", text)
+    # Unwrap parenthetical asides. The engine treats a bracket as a hard stop
+    # and the sentence comes out limping, so keep the words and drop the
+    # brackets rather than dropping the aside with them.
+    text = re.sub(r"[\(\)\[\]（）【】]", " ", text)
     # Normalize punctuation and pauses
     text = re.sub(r"\.{2,}", "…", text)
     text = re.sub(r"[!]{2,}", "!", text)
@@ -962,15 +1366,147 @@ class Mouth:
             log("tts", f"{C['am']}Google Burmese TTS failed ({e}); falling back to Edge-TTS{C['x']}", "am")
             return False
 
-    def _speak_burmese_edge(self, text, on_level=None):
-        """Synthesize Burmese using Microsoft's Native Neural Speech Model."""
+    # ── Burmese TTS, primary is Gemini when a Google key is configured ──
+    # Gemini has 30+ prebuilt voices and speaks Burmese; the older
+    # texttospeech.googleapis.com does not. Falls back to Edge for a missing
+    # key, a bad key or a network blip.
+
+    # Persona → Gemini voice, chosen for a distinct character each. Face
+    # config can override via voice.my_gemini.
+    GEMINI_VOICES = {
+        "aung": "Puck",         # young male, upbeat
+        "hnin": "Aoede",        # young female, breezy
+        "zaw":  "Charon",       # adult male, informative
+        "mya":  "Kore",         # adult female, firm
+        "uba":  "Sadaltager",   # older male, knowledgeable
+    }
+    GEMINI_DEFAULT = {"male": "Charon", "female": "Kore"}
+    GEMINI_MODEL = "gemini-2.5-flash-preview-tts"
+    GEMINI_URL = ("https://generativelanguage.googleapis.com/v1beta/models/"
+                  "{model}:generateContent?key={key}")
+    # Accept both key formats Google issues. AIzaSy… is the older one; AQ.…
+    # is the format AI Studio has started giving out. A key that begins with
+    # anything else is not a Google key and should not reach this endpoint.
+    GOOGLE_KEY_PREFIXES = ("AIzaSy", "AQ.")
+
+    @staticmethod
+    def _looks_like_google_key(k):
+        return isinstance(k, str) and any(
+            k.startswith(p) for p in Mouth.GOOGLE_KEY_PREFIXES)
+
+    def _synth_burmese_gemini(self, text):
+        """Google Gemini TTS. Returns (audio, rate) or None."""
+        import base64, urllib.request
+        import numpy as np
+
+        key = (bus.config().get("tts", {}) or {}).get("api_key", "").strip()
+        if not self._looks_like_google_key(key):
+            return None
+        if time.time() < getattr(self, "_gemini_cooldown_until", 0):
+            return None
+
+        f = bus.face()
+        fid = f.get("id", "")
+        v = (f.get("voice") or {})
+        gender = "female" if f.get("gender") == "female" else "male"
+        voice_name = (v.get("my_gemini")
+                      or self.GEMINI_VOICES.get(fid)
+                      or self.GEMINI_DEFAULT[gender])
+
+        # Gemini takes rate/pitch as instructions to the model, not as knobs.
+        # Personas already differ by voice character, so nothing extra needed.
+        payload = {
+            "contents": [{"parts": [{"text": text}]}],
+            "generationConfig": {
+                "responseModalities": ["AUDIO"],
+                "speechConfig": {
+                    "voiceConfig": {
+                        "prebuiltVoiceConfig": {"voiceName": voice_name}
+                    }
+                },
+            },
+        }
+        url = self.GEMINI_URL.format(model=self.GEMINI_MODEL, key=key)
+        req = urllib.request.Request(
+            url, data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"}, method="POST")
+        last = None
+        for attempt in range(SYNTH_TRIES):
+            try:
+                with urllib.request.urlopen(req, timeout=SYNTH_TIMEOUT) as r:
+                    body = json.loads(r.read())
+                cand = (body.get("candidates") or [{}])[0]
+                parts = (cand.get("content") or {}).get("parts") or []
+                inline = parts[0].get("inlineData") if parts else None
+                if not inline or not inline.get("data"):
+                    # transient — the model sometimes returns finishReason
+                    # OTHER with no audio, and retrying gets it
+                    last = f"empty response ({cand.get('finishReason','?')})"
+                    continue
+                # audio/L16;codec=pcm;rate=24000 — signed 16-bit little-endian
+                pcm = base64.b64decode(inline["data"])
+                audio = np.frombuffer(pcm, dtype="<i2").astype("float32") / 32768.0
+                mime = inline.get("mimeType", "")
+                rate_hz = 24000
+                if "rate=" in mime:
+                    try:
+                        rate_hz = int(mime.split("rate=")[1].split(";")[0])
+                    except (ValueError, IndexError):
+                        pass
+                if attempt:
+                    log("tts", f"{C['dim']}gemini recovered on attempt "
+                               f"{attempt + 1}{C['x']}", "dim")
+                return audio, rate_hz
+            except urllib.error.HTTPError as e:
+                # Terminal codes: no point burning attempts on a bad key or a
+                # missing voice. 429 is terminal *for this reply*: retrying it
+                # immediately just spends more of a quota that is already empty.
+                if e.code in (400, 401, 403, 404):
+                    detail = e.read()[:200].decode("utf-8", errors="replace")
+                    log("tts", f"{C['am']}gemini refused ({e.code}): "
+                               f"{detail}{C['x']}", "am")
+                    return None
+                if e.code == 429:
+                    # Cool off long enough that the rest of this turn goes to
+                    # Edge, and the next turn tries Gemini again. Free-tier
+                    # quotas are per-minute so a minute is the right length.
+                    self._gemini_cooldown_until = time.time() + 60
+                    log("tts", f"{C['am']}gemini rate-limited (429); "
+                               f"using Edge for the next minute{C['x']}", "am")
+                    return None
+                last = e
+            except Exception as e:
+                last = e
+        log("tts", f"{C['am']}gemini failed after {SYNTH_TRIES} tries "
+                   f"({last}); falling back to Edge{C['x']}", "am")
+        return None
+
+    def _synth_burmese(self, text):
+        """Render Burmese to samples. Try Gemini first, fall back to Edge.
+
+        A Google key sets the primary — 30+ voices instead of Edge's two — but
+        the free Edge path is always there so a missing key, a bad key, or a
+        network blip does not leave him mute.
+        """
+        got = self._synth_burmese_gemini(text)
+        if got:
+            return got
+        return self._synth_burmese_edge_bytes(text)
+
+    def _synth_burmese_edge_bytes(self, text):
+        """Render Burmese via Microsoft Edge-TTS. Returns (audio, rate) or None.
+
+        Free but only two voices exist — Thiha and Nilar — so five personas
+        share them via rate and pitch. The primary path is Google Cloud when a
+        key is configured; this is the fallback.
+        """
         import asyncio, tempfile
-        import numpy as np, sounddevice as sd, soundfile as sf
+        import numpy as np, soundfile as sf
         try:
             import edge_tts
         except ImportError:
             log("tts", f"{C['am']}edge-tts not installed; cannot speak Burmese{C['x']}", "am")
-            return False
+            return None
 
         f = bus.face()
         v = (f.get("voice") or {})
@@ -979,31 +1515,73 @@ class Mouth:
         voice = v.get("my", default_my)
         rate = v.get("my_rate", "-2%")
         pitch = v.get("my_pitch", "+0Hz")
-        tmp = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
-        tmp.close()
-        try:
-            async def go():
-                await edge_tts.Communicate(text, voice, rate=rate, pitch=pitch).save(tmp.name)
-            asyncio.run(go())
-            audio, rate_hz = sf.read(tmp.name, dtype="float32")
-            if audio.ndim > 1:
-                audio = audio.mean(axis=1)
-        except Exception as e:
-            log("tts", f"{C['am']}Edge-TTS voice unavailable ({e}){C['x']}", "am")
-            return False
-        finally:
-            os.path.exists(tmp.name) and os.unlink(tmp.name)
+        # A reply is several requests now rather than one, so a blip that used
+        # to cost a whole answer once in a while now gets several chances to
+        # land in the middle of one — and a missing piece sounds exactly like
+        # Lugalay stopping half way. Transient failures come back on the next
+        # attempt; only a real outage reaches the fallback voice.
+        last = None
+        for attempt in range(SYNTH_TRIES):
+            tmp = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
+            tmp.close()
+            try:
+                async def go():
+                    # edge-tts has been seen to hang on a websocket that never
+                    # connects. Without a bound, one bad connection stops the
+                    # reply dead with no error and no sound.
+                    await asyncio.wait_for(
+                        edge_tts.Communicate(text, voice, rate=rate,
+                                             pitch=pitch).save(tmp.name),
+                        timeout=SYNTH_TIMEOUT)
+                asyncio.run(go())
+                audio, rate_hz = sf.read(tmp.name, dtype="float32")
+                if audio.ndim > 1:
+                    audio = audio.mean(axis=1)
+                if attempt:
+                    log("tts", f"{C['dim']}recovered on attempt {attempt + 1}{C['x']}",
+                        "dim")
+                return audio, rate_hz
+            except Exception as e:
+                last = e
+                if attempt + 1 < SYNTH_TRIES:
+                    time.sleep(0.4 * (attempt + 1))
+            finally:
+                os.path.exists(tmp.name) and os.unlink(tmp.name)
 
+        log("tts", f"{C['am']}Edge-TTS voice unavailable after {SYNTH_TRIES} "
+                   f"tries ({last}){C['x']}", "am")
+        return None
+
+    def _play(self, audio, rate_hz, on_level=None, text=""):
+        """Push samples at the speakers, surviving a device that goes away."""
+        import numpy as np, sounddevice as sd
         block = 1024
-        with sd.OutputStream(samplerate=rate_hz, channels=1, dtype="float32") as out:
-            for i in range(0, len(audio), block):
-                if self.stop_flag.is_set():
-                    break
-                b = audio[i:i + block].astype("float32")
-                if on_level:
-                    on_level(min(1.0, float(np.sqrt(np.mean(np.square(b)))) * 4))
-                out.write(b.reshape(-1, 1))
+        try:
+            with sd.OutputStream(samplerate=rate_hz, channels=1,
+                                 dtype="float32") as out:
+                for i in range(0, len(audio), block):
+                    if self.stop_flag.is_set():
+                        break
+                    b = audio[i:i + block].astype("float32")
+                    if on_level:
+                        on_level(min(1.0, float(np.sqrt(np.mean(np.square(b)))) * 4))
+                    out.write(b.reshape(-1, 1))
+        except Exception as e:
+            # Headphones pulled out mid-sentence, an output device switched, a
+            # sample rate CoreAudio will not take — PortAudio raises, and this
+            # used to travel all the way up and kill the voice loop, so one
+            # unplugged cable ended the session until the app was restarted.
+            log("tts", f"{C['am']}audio output failed ({e}); "
+                       f"using the system voice{C['x']}", "am")
+            text and self._say_fallback(text)
         return True
+
+    def _speak_burmese_edge(self, text, on_level=None):
+        """Synthesize Burmese using Microsoft's Native Neural Speech Model."""
+        got = self._synth_burmese(text)
+        if not got:
+            return False
+        return self._play(got[0], got[1], on_level, text)
 
     def _speak_burmese(self, text, on_level=None):
         """Synthesize Burmese using native Burmese neural speech models with SSML prosody."""
@@ -1081,6 +1659,89 @@ class Mouth:
                     if on_level:
                         on_level(min(1.0, float(np.sqrt(np.mean(np.square(b)))) * 4))
                     out.write(b.reshape(-1, 1))
+        on_level and on_level(0.0)
+
+    # Streaming renders in units small enough that the next one is ready before
+    # the current finishes. Whole-block speech deliberately never splits Burmese
+    # (LIMIT_MY is 4000), and a 27-second blob takes ~5s to synthesise — long
+    # enough to run the speakers dry and put a hole in the middle of the answer.
+    # ~15 Burmese characters is about a second of speech, so this is roughly
+    # six seconds a unit: long enough not to sound chopped, short enough that
+    # rendering it (~0.8s) finishes well inside the previous unit's playback.
+    STREAM_LIMIT_MY = 90
+
+    @classmethod
+    def _stream_units(cls, text):
+        """Sentence-sized runs of Burmese, so nothing takes long to render."""
+        out, buf = [], ""
+        for sent in SENT.split(text.replace("\n", " ")):
+            sent = sent.strip()
+            if not sent:
+                continue
+            if buf and len(buf) + len(sent) < cls.STREAM_LIMIT_MY:
+                buf = f"{buf} {sent}".strip()
+            else:
+                buf and out.append(buf)
+                buf = sent
+        buf and out.append(buf)
+        return out or [text]
+
+    def speak_burmese_stream(self, pieces, on_level=None):
+        """Speak Burmese as the brain writes it, one sentence at a time.
+
+        The whole reply used to be held back until the last word was generated,
+        because splitting it by script sent each fragment to a different voice
+        and the accent jumped around mid-sentence. That is not what this does:
+        every piece here is Burmese and goes to the same Burmese voice, so
+        nothing hops — he simply starts hearing the answer about six seconds
+        sooner, which is most of the wait.
+
+        A worker renders ahead while the speakers are busy, so the joins between
+        sentences are silent rather than a pause per full stop.
+        """
+        self.stop_flag.clear()
+        q = queue.Queue(maxsize=3)
+
+        def render():
+            try:
+                for piece in pieces:
+                    if self.stop_flag.is_set():
+                        break
+                    whole = format_burmese_for_speech(clean_spoken_text(piece))
+                    if not whole.strip():
+                        continue
+                    # If a Google key is configured and Gemini is not on
+                    # cooldown, send the whole piece as one request — Gemini's
+                    # free tier is 10 RPM and each unit was another request.
+                    key = (bus.config().get("tts", {}) or {}).get("api_key", "").strip()
+                    gemini_up = (self._looks_like_google_key(key) and
+                                 time.time() >= getattr(self,
+                                     "_gemini_cooldown_until", 0))
+                    units = [whole] if gemini_up else self._stream_units(whole)
+                    for text in units:
+                        if self.stop_flag.is_set():
+                            break
+                        got = self._synth_burmese(text)
+                        if got:
+                            q.put((got[0], got[1], text))
+                        else:                   # network gone, voice refused
+                            q.put((None, None, text))
+            except Exception as e:
+                log("tts", f"{C['am']}speech stream ended early ({e}){C['x']}", "am")
+            finally:
+                q.put(None)                     # nothing more is coming
+
+        threading.Thread(target=render, daemon=True).start()
+
+        while True:
+            item = q.get()
+            if item is None or self.stop_flag.is_set():
+                break
+            audio, rate_hz, text = item
+            if audio is None:
+                self._say_fallback(text)
+            else:
+                self._play(audio, rate_hz, on_level, text)
         on_level and on_level(0.0)
 
     def interrupt(self):
@@ -1230,7 +1891,8 @@ def check():
         ok = False; print(f"  {C['rd']}✗{C['x']} microphone: {e}")
     r = subprocess.run(["claude", "-p", "Reply with exactly: ok",
                         "--output-format", "json"], cwd=HOME, env=Brain._env(),
-                       capture_output=True, text=True)
+                       capture_output=True, text=True,
+                       encoding="utf-8", errors="replace")
     try:
         d = json.loads(r.stdout)
         if d.get("is_error"):
@@ -1291,10 +1953,10 @@ def setkey():
         print("  or right option, or an F-key.\n")
         return 1
 
-    with open(CONFIG_PATH) as f:
+    with open(CONFIG_PATH, encoding="utf-8") as f:
         cfg = json.load(f)
     cfg["mic"]["key"] = spec
-    with open(CONFIG_PATH, "w") as f:
+    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2, ensure_ascii=False)
     print(f"\n  {C['gr']}talk key set to {spec}{C['x']}")
     print(f"  saved to {CONFIG_PATH}")
@@ -1332,6 +1994,9 @@ def main():
 
     brain = Brain(CFG.get("brain", {}), mock=a.mock_brain,
                   lang=CFG.get("language", {}).get("reply", "my"))
+    # start pulling the local model into memory now rather than on his first
+    # question; harmless and a no-op when the brain is Claude
+    brain.warm_local()
 
     if a.text:
         bus.write("thinking", a.text)
@@ -1370,6 +2035,17 @@ def main():
         bus.write("thinking", said, 0.0)
 
         cfg = bus.config()
+
+        # If he asked Lugalay to LOOK at something, take the photo before the
+        # brain is called and hand it the path. Claude reads the image itself,
+        # so there is no vision model here and no second round trip.
+        asked = said
+        if look is not None and look.wants_to_look(said):
+            log("eyes", "looking...", "cy")
+            asked = look.augment(said)
+            if "could not be used" in asked:
+                log("eyes", f"{C['am']}camera unavailable{C['x']}", "am")
+
         speak_mode = cfg.get("language", {}).get("reply", "my")
         if speak_mode == "my":
             target_lang = "my"
@@ -1380,17 +2056,37 @@ def main():
             target_lang = lang if lang in ("my", "en") else ("my" if is_burmese(said) else "en")
 
         is_my = (target_lang == "my") or is_burmese(said)
-        if not CFG.get("brain", {}).get("stream", True) or is_my:
-            reply = brain.ask(said, lang=target_lang)
+        streaming = CFG.get("brain", {}).get("stream", True)
+
+        if not streaming:
+            reply = brain.ask(asked, lang=target_lang)
             log(name.lower(), reply, "gr")
             bus.write("speaking", reply, 0.4)
             mouth.speak(reply, level)
             bus.write("idle")
             return
 
+        if is_my:
+            # Burmese, spoken as it is written. Measured on this machine: the
+            # first sentence is ready 5.9s before the last one, and the reply
+            # used to sit silent for all of it. Every piece goes to the same
+            # Burmese voice, so the accent still never changes mid-answer.
+            said_so_far = []
+
+            def pieces():
+                for piece, is_first in brain.stream(asked, lang=target_lang):
+                    said_so_far.append(piece)
+                    log(name.lower() if is_first else "", piece, "gr")
+                    bus.write("speaking", " ".join(said_so_far), 0.4)
+                    yield piece
+
+            mouth.speak_burmese_stream(pieces(), level)
+            bus.write("idle")
+            return
+
         # For English: stream sentence-by-sentence with Kokoro
         said_parts = []
-        for piece, first in brain.stream(said, lang=target_lang):
+        for piece, first in brain.stream(asked, lang=target_lang):
             said_parts.append(piece)
             if first:
                 log(name.lower(), piece, "gr")
@@ -1399,6 +2095,26 @@ def main():
             bus.write("speaking", piece, 0.4)
             mouth.speak(piece, level)
         bus.write("idle")
+
+    def safe_respond(said, lang=None):
+        """One turn, and never more than one turn, can fail.
+
+        Everything in a turn is a moving part — a model that times out, a
+        speech service that 500s, an audio device that vanishes. Letting any of
+        them out of here stopped the loop dead and left a silent window that
+        still looked alive.
+        """
+        try:
+            respond(said, lang)
+        except Exception as e:
+            log("brain", f"{C['rd']}that turn failed ({type(e).__name__}: {e}); "
+                         f"still listening{C['x']}", "rd")
+            try:
+                bus.write("error", "", 0.0)
+                time.sleep(0.8)
+                bus.write("idle")
+            except Exception:
+                pass
 
     if hands_free:
         mic = OpenMic(CFG, events)
@@ -1441,7 +2157,7 @@ def main():
                 if not said:
                     log("mic", "nothing caught", "am")
                     bus.write("idle"); mic.listen(); continue
-                respond(said, lang)
+                safe_respond(said, lang)
                 mic.listen()
 
             elif kind == "ptt_down":
@@ -1464,7 +2180,7 @@ def main():
                     log("mic", "nothing caught", "am")
                     bus.write("idle")
                     continue
-                respond(said, lang)
+                safe_respond(said, lang)
     except KeyboardInterrupt:
         pass
     finally:

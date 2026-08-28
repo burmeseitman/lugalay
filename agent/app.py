@@ -24,7 +24,10 @@ os.makedirs(LOGDIR, exist_ok=True)
 LOG = os.path.join(LOGDIR, "app.log")
 
 # A .app has no stdout to speak of; keep a real log instead of losing it.
-_log = open(LOG, "a", buffering=1)
+# encoding is not optional: everything Lugalay says goes through here, and
+# most of it is Burmese. Windows would otherwise pick cp1252 and take the
+# whole app down with a UnicodeEncodeError on the very first greeting.
+_log = open(LOG, "a", buffering=1, encoding="utf-8", errors="replace")
 sys.stdout = sys.stderr = _log
 print(f"\n=== Lugalay started {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
 
@@ -144,6 +147,25 @@ def main():
     # a fresh install does not know who it is talking to yet: ask before
     # starting the microphone, so the greeting can use their actual name
     first_run = not bus.config().get("setup_done")
+
+    # Repair an install that was set up before these files were written to the
+    # right place. Setup used to resolve HOME from its own location, which in a
+    # packaged build is inside the read-only bundle, so CLAUDE.md, the memory
+    # profile and the permission allowlist never reached the user's directory —
+    # leaving a Lugalay with no personality and no permission to do anything.
+    # Only writes what is missing, so nothing anyone has edited is touched.
+    if not first_run:
+        missing = [f for f in ("CLAUDE.md", os.path.join(".claude", "settings.json"),
+                               os.path.join("memory", "profile.md"))
+                   if not os.path.exists(os.path.join(bus.HOME, f))]
+        if missing:
+            try:
+                cfg = bus.config()
+                setup_mod = _load("lugalay_setup", bus.resource("setup.py"))
+                wrote = setup_mod.render(cfg.get("user", ""), cfg.get("name", "Lugalay"))
+                print(f"[app] repaired missing {missing} -> wrote {wrote}")
+            except Exception as e:
+                print(f"[app] could not repair {missing}: {e}")
     if not first_run:
         start_voice()
 

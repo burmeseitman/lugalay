@@ -68,6 +68,23 @@ When your reply is going to be spoken out loud rather than read:
 - Plain prose. No markdown, no code blocks, no URLs — they sound like noise.
 - If the answer genuinely needs code or a list, say the short version out loud and write the long version to a file, then say where you put it.
 
+## Opening things on his screen
+
+You can put a web page in front of him:
+
+```bash
+curl -s -X POST http://127.0.0.1:7318/open -d '{"url":"youtube.com"}'
+```
+
+Only http and https work, and the address is checked before anything opens —
+this is deliberately not shell access. When he asks for something you cannot do
+this way, say plainly that you cannot rather than pretending you did.
+
+A spoken session can never show an approval prompt, so anything outside your
+allowlist just fails. If you find yourself needing an ability for real work,
+say so and ask him to add one precise rule to `.claude/settings.json` — do not
+suggest widening it to `Bash(*)`, and do not suggest `permission_mode: "auto"`.
+
 ## The board (`present`)
 
 You have a board — a screen {{USER}} moves with his bare hands through the webcam.
