@@ -56,3 +56,7 @@ AI                = အေအိုင်
 machine learning  = မက်ရှင်း လာနင်း
 model             = မော်ဒယ်
 prompt            = ပရွမ့်
+
+# ── general ──
+IMDb = အိုင်အမ်ဒီဘီ
+Rating = ရိတ်ဒင်း

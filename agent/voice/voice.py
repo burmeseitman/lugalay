@@ -170,7 +170,24 @@ class Brain:
     @classmethod
     def style(cls, lang):
         """The speaking instructions for `lang`, file first, built-in second."""
-        return cls.spoken_style(lang) or cls.LANG.get(lang, cls.LANG["my"])
+        body = cls.spoken_style(lang) or cls.LANG.get(lang, cls.LANG["my"])
+        f = bus.face()
+        gender = (f.get("gender") or "male").lower()
+        if (lang == "my" or lang is None) and body:
+            if gender == "male":
+                gender_rule = (
+                    "\n\n[Gender & Politeness Constraint - STRICT]\n"
+                    "You are a MALE assistant. You MUST strictly use male polite particles ('ခင်ဗျာ', 'ပါခင်ဗျာ', 'ဟုတ်ကဲ့ခင်ဗျာ', 'ဗျာ'). "
+                    "You are STRICTLY FORBIDDEN from using female particles like 'ရှင့်', 'ပါရှင့်', or 'ရှင်'."
+                )
+            else:
+                gender_rule = (
+                    "\n\n[Gender & Politeness Constraint - STRICT]\n"
+                    "You are a FEMALE assistant. You MUST strictly use female polite particles ('ရှင့်', 'ပါရှင့်', 'ဟုတ်ကဲ့ရှင့်', 'ရှင်'). "
+                    "You are STRICTLY FORBIDDEN from using male particles like 'ခင်ဗျာ', 'ပါခင်ဗျာ', or 'ဗျာ'."
+                )
+            body = body + gender_rule
+        return body
 
     def _local_system(self, lang):
         """A local model has no tools, so who Lugalay is has to be handed to
@@ -1262,9 +1279,27 @@ SPOKEN_CONVERSIONS = [
 
 
 def normalize_burmese_spoken(text):
-    """Convert residual formal literary particles (စာပေဟန်) into natural spoken forms (စကားပြောဟန်)."""
+    """Convert residual formal literary particles into spoken forms, and enforce persona gender politeness."""
     for pattern, repl in SPOKEN_CONVERSIONS:
         text = re.sub(pattern, repl, text)
+
+    # Enforce strict gender politeness matching the active face persona
+    try:
+        f = bus.face()
+        gender = (f.get("gender") or "male").lower()
+        if gender == "male":
+            text = re.sub(r"ဟုတ်ကဲ့ရှင့်", "ဟုတ်ကဲ့ခင်ဗျာ", text)
+            text = re.sub(r"ပါရှင့်", "ပါခင်ဗျာ", text)
+            text = re.sub(r"ရှင့်", "ခင်ဗျာ", text)
+            text = re.sub(r"ရှင်(?=[။၊\s]|$)", "ဗျာ", text)
+        else:
+            text = re.sub(r"ဟုတ်ကဲ့ခင်ဗျာ", "ဟုတ်ကဲ့ရှင့်", text)
+            text = re.sub(r"ပါခင်ဗျာ", "ပါရှင့်", text)
+            text = re.sub(r"ခင်ဗျာ", "ရှင့်", text)
+            text = re.sub(r"ဗျာ(?=[။၊\s]|$)", "ရှင်", text)
+    except Exception:
+        pass
+
     return text
 
 
