@@ -27,7 +27,7 @@ Then just talk. There is no key to hold: it calibrates the room, waits for you t
 For a typed session instead, double-click `Lugalay Chat.command` on the Desktop, or run:
 
 ```bash
-cd ~/Projects/luagalay && claude
+cd ~/Projects/lugalay && claude
 ```
 
 ## Keys & Shortcuts

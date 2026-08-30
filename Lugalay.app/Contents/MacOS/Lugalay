@@ -11,7 +11,7 @@
 # assuming a path in somebody's home directory.
 SELF="$(cd "$(dirname "$0")/../../.." && pwd)"
 AGENT="$SELF/agent"
-[ -f "$AGENT/app.py" ] || AGENT="$HOME/Projects/luagalay/agent"
+[ -f "$AGENT/app.py" ] || AGENT="$HOME/Projects/lugalay/agent"
 PY="$AGENT/voice/.venv/bin/python"
 [ -x "$PY" ] || PY="$(command -v python3)"
 exec "$PY" "$AGENT/app.py"

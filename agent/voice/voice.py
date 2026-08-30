@@ -1201,7 +1201,7 @@ def burmese_terms():
     """
     paths = [
         os.path.join(bus.HOME, "agent", "voice", "prompts", "burmese_terms.txt"),
-        os.path.join(os.path.expanduser("~"), "luagalay", "agent", "voice", "prompts", "burmese_terms.txt"),
+        os.path.join(os.path.expanduser("~"), "lugalay", "agent", "voice", "prompts", "burmese_terms.txt"),
         os.path.join(os.path.expanduser("~"), "Lugalay", "agent", "voice", "prompts", "burmese_terms.txt"),
         os.path.join(bus.ROOT, "voice", "prompts", "burmese_terms.txt"),
         bus.resource("voice", "prompts", "burmese_terms.txt"),
