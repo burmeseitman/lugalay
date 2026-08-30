@@ -15,7 +15,11 @@ FROZEN = getattr(sys, "frozen", False)
 
 if FROZEN:
     RESOURCES = os.path.join(sys._MEIPASS, "agent")      # read-only, in the app
-    HOME = os.path.join(os.path.expanduser("~"), "Lugalay")
+    HOME = os.environ.get("LUAGALAY_HOME") or os.environ.get("LUGALAY_HOME") or (
+        os.path.join(os.path.expanduser("~"), "luagalay")
+        if os.path.exists(os.path.join(os.path.expanduser("~"), "luagalay"))
+        else os.path.join(os.path.expanduser("~"), "Lugalay")
+    )
     ROOT = os.path.join(HOME, "agent")                   # writable
 else:
     RESOURCES = os.path.dirname(os.path.abspath(__file__))
