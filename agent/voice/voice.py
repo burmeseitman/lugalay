@@ -2038,6 +2038,8 @@ def main():
 
         if not streaming:
             reply = brain.ask(asked, lang=target_lang)
+            if is_my:
+                reply = format_burmese_for_speech(clean_spoken_text(reply))
             log(name.lower(), reply, "gr")
             bus.write("speaking", reply, 0.4)
             mouth.speak(reply, level)
@@ -2045,17 +2047,15 @@ def main():
             return
 
         if is_my:
-            # Burmese, spoken as it is written. Measured on this machine: the
-            # first sentence is ready 5.9s before the last one, and the reply
-            # used to sit silent for all of it. Every piece goes to the same
-            # Burmese voice, so the accent still never changes mid-answer.
             said_so_far = []
 
             def pieces():
                 for piece, is_first in brain.stream(asked, lang=target_lang):
-                    said_so_far.append(piece)
-                    log(name.lower() if is_first else "", piece, "gr")
-                    bus.write("speaking", " ".join(said_so_far), 0.4)
+                    formatted_piece = format_burmese_for_speech(clean_spoken_text(piece))
+                    if formatted_piece.strip():
+                        said_so_far.append(formatted_piece)
+                        log(name.lower() if is_first else "", formatted_piece, "gr")
+                        bus.write("speaking", " ".join(said_so_far), 0.4)
                     yield piece
 
             mouth.speak_burmese_stream(pieces(), level)

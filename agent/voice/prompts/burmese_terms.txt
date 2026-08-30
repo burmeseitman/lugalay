@@ -57,7 +57,26 @@ machine learning  = မက်ရှင်း လာနင်း
 model             = မော်ဒယ်
 prompt            = ပရွမ့်
 
-# ── general ──
-IMDb = အိုင်အမ်ဒီဘီ
-Rating = ရိတ်ဒင်း
-A24 = အေ တွမ်တီဖိုး
+# ── general & entertainment ──
+IMDb        = အိုင်အမ်ဒီဘီ
+Rating      = ရိတ်ဒင်း
+A24         = အေ တွမ်တီဖိုး
+movie       = မူဗီ
+film        = ဖလင်
+cinema      = ရုပ်ရှင်ရုံ
+trailer     = ထရဲလား
+studio      = စတူဒီယို
+director    = ဒါရိုက်တာ
+series      = စီးရီး
+season      = ရာသီ
+episode     = အပိုင်း
+netflix     = နက်ဖလစ်
+spotify     = စပေါ့တီဖိုင်
+google      = ဂူဂဲလ်
+facebook    = ဖေ့စ်ဘွတ်ခ်
+iphone      = အိုင်ဖုန်း
+macbook     = မက်ဘွတ်
+bluetooth   = ဘလူးတုသ်
+podcast     = ပေါ့ဒ်ကတ်စ်
+link        = လင့်ခ်
+website     = ဝဘ်ဆိုဒ်
