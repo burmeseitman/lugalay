@@ -42,15 +42,6 @@ class Handler(BaseHTTPRequestHandler):
             }))
         if path == "/settings":
             cfg = bus.config()
-            raw_key = (cfg.get("tts", {}).get("api_key") or "").strip()
-            provider = "Free Edge-TTS"
-            masked = ""
-            if raw_key:
-                if raw_key.startswith("sk-"):
-                    provider = "OpenAI TTS (tts-1)"
-                else:
-                    provider = "ElevenLabs Multilingual v2"
-                masked = ("•" * 16) + (raw_key[-4:] if len(raw_key) > 4 else "")
             return self._send(200, json.dumps({
                 "user": cfg.get("user", ""),
                 "agent": cfg.get("name", "Lugalay"),
@@ -58,9 +49,6 @@ class Handler(BaseHTTPRequestHandler):
                 "speak_language": cfg.get("language", {}).get("reply", "my"),
                 "face": bus.face_id(),
                 "faces": bus.faces(),
-                "has_api_key": bool(raw_key),
-                "api_key_masked": masked,
-                "provider": provider,
             }))
         if path == "/open-hands":
             import webbrowser
@@ -117,10 +105,6 @@ class Handler(BaseHTTPRequestHandler):
                     cfg.setdefault("language", {})["reply"] = data["language"]
                 if "face" in data and data["face"]:
                     bus.set_face(data["face"])
-                if "api_key" in data:
-                    new_key = data["api_key"].strip()
-                    if not new_key.startswith("•"):
-                        cfg.setdefault("tts", {})["api_key"] = new_key
                 bus.save_config(cfg)
                 return self._send(200, json.dumps({"ok": True, "face": bus.face_id()}))
             except Exception as e:

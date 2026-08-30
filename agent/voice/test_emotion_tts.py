@@ -62,24 +62,24 @@ class TestEmotionPipeline(unittest.TestCase):
     def test_prosody_calculation(self):
         # Base pitch +0Hz, base rate -2%
         p, r, b = ProsodyInjector.calculate_prosody(EmotionType.EXCITED, base_pitch="+0Hz", base_rate="-2%")
-        self.assertEqual(p, "+12Hz")
-        self.assertEqual(r, "+10%")
-        self.assertEqual(b, 200)
+        self.assertEqual(p, "+2Hz")
+        self.assertEqual(r, "+2%")
+        self.assertEqual(b, 250)
 
         p, r, b = ProsodyInjector.calculate_prosody(EmotionType.SERIOUS, base_pitch="+0Hz", base_rate="-2%")
-        self.assertEqual(p, "-10Hz")
-        self.assertEqual(r, "-20%")
-        self.assertEqual(b, 900)
+        self.assertEqual(p, "-2Hz")
+        self.assertEqual(r, "-6%")
+        self.assertEqual(b, 650)
 
         p, r, b = ProsodyInjector.calculate_prosody(EmotionType.CALM, base_pitch="+0Hz", base_rate="-2%")
         self.assertEqual(p, "+0Hz")
-        self.assertEqual(r, "-7%")
-        self.assertEqual(b, 500)
-
-        p, r, b = ProsodyInjector.calculate_prosody(EmotionType.QUESTIONING, base_pitch="+0Hz", base_rate="-2%")
-        self.assertEqual(p, "+8Hz")
         self.assertEqual(r, "-2%")
         self.assertEqual(b, 400)
+
+        p, r, b = ProsodyInjector.calculate_prosody(EmotionType.QUESTIONING, base_pitch="+0Hz", base_rate="-2%")
+        self.assertEqual(p, "+2Hz")
+        self.assertEqual(r, "-2%")
+        self.assertEqual(b, 350)
 
     def test_text_segmentation_and_chunking(self):
         text = "မင်္ဂလာပါဗျာ! အခုပဲ သတင်းကောင်း ရလာတယ်။ ဒါပေမယ့် သတိထားရမယ့် အချက်လည်း ရှိတယ်နော်။ ဒီအကြောင်း နားလည်ရဲ့လား?"

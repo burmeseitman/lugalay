@@ -70,10 +70,6 @@
   <label for="face">Voice &amp; Face</label>
   <select id="face"></select>
 
-  <label for="api_key">Voice API Key <span style="text-transform:none;opacity:.6">· Optional</span></label>
-  <input type="password" id="api_key" autocomplete="off" placeholder="Leave empty for free Microsoft Edge-TTS">
-  <p class="note" style="margin:6px 0 0">Free Microsoft Edge-TTS runs by default for native Burmese speech.</p>
-
   <button id="go">Start</button>
   <div class="err" id="err"></div>
   <p class="note">Choose your listening and speaking languages. Nothing here leaves this machine.</p>
@@ -108,8 +104,7 @@ async function submit(){
       body:JSON.stringify({user, agent:$("agent").value.trim(),
                            listen_language:$("listen_language").value,
                            speak_language:$("speak_language").value,
-                           face:$("face").value,
-                           api_key:$("api_key").value.trim()})});
+                           face:$("face").value})});
     if(!r.ok) throw new Error((await r.json()).error||"setup failed");
     // hand back to the app, which starts the voice and swaps to the face
     const api=window.pywebview&&window.pywebview.api;

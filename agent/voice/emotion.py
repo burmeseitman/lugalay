@@ -29,27 +29,27 @@ class EmotionChunk:
     break_ms: int
 
 
-# Emotion mapping deltas specified for Edge-TTS
+# Emotion mapping deltas calibrated for natural Edge-TTS prosody without persona drift
 PROSODY_MAP = {
     EmotionType.EXCITED: {
-        "pitch_delta_hz": 12,
-        "rate_delta_pct": 12,
-        "break_ms": 200,
+        "pitch_delta_hz": 2,      # Subtle natural brightness
+        "rate_delta_pct": 4,      # Lively tempo
+        "break_ms": 250,
     },
     EmotionType.SERIOUS: {
-        "pitch_delta_hz": -10,
-        "rate_delta_pct": -18,
-        "break_ms": 900,
+        "pitch_delta_hz": -2,     # Thoughtful, calm gravity
+        "rate_delta_pct": -4,     # Measured tempo
+        "break_ms": 650,
     },
     EmotionType.CALM: {
-        "pitch_delta_hz": 0,
-        "rate_delta_pct": -5,
-        "break_ms": 500,
-    },
-    EmotionType.QUESTIONING: {
-        "pitch_delta_hz": 8,
+        "pitch_delta_hz": 0,      # Consistent persona baseline
         "rate_delta_pct": 0,
         "break_ms": 400,
+    },
+    EmotionType.QUESTIONING: {
+        "pitch_delta_hz": 2,      # Inquisitive rising inflection
+        "rate_delta_pct": 0,
+        "break_ms": 350,
     },
 }
 
@@ -102,13 +102,13 @@ class EmotionAnalyzer:
 
     @classmethod
     def segment_text(cls, text: str) -> List[Tuple[str, str]]:
-        """Split text by sentences/clauses into (clause_text, emotion) pairs."""
+        """Split text into sentence-level acoustic units with consistent emotional tone."""
         if not text or not text.strip():
             return []
 
-        # Split along major sentence / clause boundaries while preserving meaningful chunks
-        raw_parts = re.split(r"([။!?\n]+)", text)
-        clauses = []
+        # Split along major sentence boundaries (။ ! ? … \n)
+        raw_parts = re.split(r"([။!?…\n]+)", text)
+        sentences = []
         i = 0
         while i < len(raw_parts):
             chunk = raw_parts[i].strip()
@@ -117,28 +117,15 @@ class EmotionAnalyzer:
             if not chunk and not punct:
                 continue
 
-            full_clause = (chunk + punct).strip()
-            if not full_clause:
-                continue
+            full_sent = (chunk + punct).strip()
+            if full_sent:
+                emotion = cls.detect_clause_emotion(full_sent)
+                sentences.append((full_sent, emotion))
 
-            # Check if clause contains multiple comma-separated thoughts (၊)
-            sub_clauses = re.split(r"([၊,]+)", full_clause)
-            j = 0
-            while j < len(sub_clauses):
-                sub = sub_clauses[j].strip()
-                sub_punct = sub_clauses[j + 1].strip() if j + 1 < len(sub_clauses) else ""
-                j += 2
-                if not sub and not sub_punct:
-                    continue
-                combined = (sub + (" " if sub_punct else "")).strip()
-                if combined:
-                    emotion = cls.detect_clause_emotion(combined)
-                    clauses.append((combined, emotion))
+        if not sentences and text.strip():
+            sentences.append((text.strip(), cls.detect_clause_emotion(text)))
 
-        if not clauses and text.strip():
-            clauses.append((text.strip(), cls.detect_clause_emotion(text)))
-
-        return clauses
+        return sentences
 
 
 class ProsodyInjector:

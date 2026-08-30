@@ -166,16 +166,6 @@
     <label for="cfg_face">Voice &amp; Face</label>
     <select id="cfg_face"></select>
 
-    <label for="cfg_key">Voice API Key <span style="text-transform:none;opacity:.6">· Optional</span></label>
-    <div class="key-row">
-      <input type="password" id="cfg_key" autocomplete="off" placeholder="Leave empty for free Microsoft Edge-TTS">
-      <button class="eye-btn" id="cfg_eye" type="button" title="Toggle visibility">👁</button>
-    </div>
-    <div class="provider-badge" id="cfg_provider">Active: Microsoft Edge-TTS (Free)</div>
-    <div style="font-size:11px;opacity:.6;margin-top:4px;line-height:1.5">
-      Default: <b>Microsoft Edge-TTS</b> (Free, native Burmese). Optional: <b>sk-…</b> OpenAI · anything else ElevenLabs.
-    </div>
-
     <div style="margin-top:14px">
       <button id="cfg_hands_btn" type="button" style="width:100%;background:#0d1820;border:1px solid #1e303d;color:#39d0d8;padding:8px;font:inherit;font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;border-radius:6px;cursor:pointer">🖐️ Open Hands &amp; Vision Board (H)</button>
     </div>
@@ -935,18 +925,12 @@ const $cfgAgent = document.getElementById("cfg_agent");
 const $cfgListen = document.getElementById("cfg_listen");
 const $cfgSpeak = document.getElementById("cfg_speak");
 const $cfgFace = document.getElementById("cfg_face");
-const $cfgKey = document.getElementById("cfg_key");
-const $cfgEye = document.getElementById("cfg_eye");
-const $cfgProvider = document.getElementById("cfg_provider");
 const $cfgSave = document.getElementById("cfg_save");
 const $cfgClose = document.getElementById("cfg_close");
 
 let isModalOpen = false;
 
 async function loadSettings(){
-  // Fetch once and paint every field, badge included. Called on open, and
-  // again after save so the badge shows what actually took effect — an
-  // AIzaSy… key flipping the provider from Edge to Google Cloud.
   const d = await (await fetch("/settings", {cache: "no-store"})).json();
   $cfgUser.value = d.user || "";
   $cfgAgent.value = d.agent || "Lugalay";
@@ -960,9 +944,6 @@ async function loadSettings(){
     if(f.id === d.face) opt.selected = true;
     $cfgFace.appendChild(opt);
   });
-  $cfgKey.value = d.has_api_key ? d.api_key_masked : "";
-  $cfgKey.type = "password";
-  $cfgProvider.textContent = `Active: ${d.provider}`;
 }
 
 async function openSettings(){
@@ -981,9 +962,6 @@ $sBtn.onclick = openSettings;
 $cfgClose.onclick = closeSettings;
 const $cfgHandsBtn = document.getElementById("cfg_hands_btn");
 if($cfgHandsBtn) $cfgHandsBtn.onclick = () => fetch("/open-hands");
-$cfgEye.onclick = () => {
-  $cfgKey.type = $cfgKey.type === "password" ? "text" : "password";
-};
 
 $cfgSave.onclick = async () => {
   $cfgSave.disabled = true;
@@ -994,8 +972,7 @@ $cfgSave.onclick = async () => {
       agent: $cfgAgent.value.trim(),
       listen_language: $cfgListen.value,
       speak_language: $cfgSpeak.value,
-      face: $cfgFace.value,
-      api_key: $cfgKey.value.trim()
+      face: $cfgFace.value
     };
     const r = await fetch("/settings", {
       method: "POST",
@@ -1007,9 +984,6 @@ $cfgSave.onclick = async () => {
       document.title = S.name;
       const idx = S.personas.findIndex(p => p.id === payload.face);
       if(idx >= 0) selectFace(idx);
-      // Reload the settings so the provider badge shows what actually took
-      // effect — Free Edge-TTS -> Google Cloud TTS when an AIzaSy key lands.
-      // Closing the dialog before reloading meant a "did nothing" impression.
       await loadSettings();
       $cfgSave.textContent = "Saved ✓";
       setTimeout(() => $cfgSave.textContent = "Save Changes", 1400);
