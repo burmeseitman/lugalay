@@ -40,7 +40,7 @@
     "engine": "auto",
     "provider": "auto",
     "api_key": "",
-    "_api_key_note": "Paste either your ElevenLabs API Key or Google Cloud API Key here. If set, ElevenLabs Multilingual v2 or Google Cloud Neural2 will speak in ultra-human voice. Leave empty to use free Microsoft Edge-TTS.",
+    "_api_key_note": "Paste your ElevenLabs API Key here for custom English voices. Leave empty to use free Microsoft Edge-TTS.",
     "voice": "bm_lewis",
     "burmese_voice": "my-MM-ThihaNeural",
     "speed": 1.0,

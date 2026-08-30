@@ -32,6 +32,14 @@ try:
 except Exception:                      # a build without them still talks
     local_tools = None
 
+try:
+    import emotion  # noqa: E402
+except Exception:
+    try:
+        from voice import emotion  # noqa: E402
+    except Exception:
+        emotion = None
+
 # bus decides where things live: alongside the code in a checkout, in the
 # user's own directory when this is running from a packaged app.
 HOME = bus.HOME
@@ -1210,26 +1218,78 @@ def transliterate_terms(text):
     return text
 
 
+SPOKEN_CONVERSIONS = [
+    # Multi-word & verb phrases
+    (r"ဖြစ်ပါသည်", "ဖြစ်ပါတယ်"),
+    (r"ပါသည်", "ပါတယ်"),
+    (r"မည်ဖြစ်သည်", "မှာဖြစ်တယ်"),
+    (r"မည်ဖြစ်", "မှာဖြစ်"),
+    (r"ဖြစ်သည်", "ဖြစ်တယ်"),
+    (r"ဆောင်ရွက်ပါမည်", "လုပ်ပေးပါမယ်"),
+    (r"ဆောင်ရွက်မည်", "လုပ်ပေးမယ်"),
+    (r"အဘယ်ကြောင့်ဆိုသော်", "ဘာဖြစ်လို့လဲဆိုတော့"),
+    (r"သို့သော်လည်း|သို့သော်", "ဒါပေမဲ့"),
+    (r"ပတ်သက်၍", "ပတ်သက်ပြီး"),
+    (r"ပြီးလျှင်", "ပြီးတော့"),
+    (r"သော်လည်း", "ပေမဲ့"),
+    (r"ယနေ့", "ဒီနေ့"),
+    (r"၎င်း", "ဒါ"),
+    (r"ဤ", "ဒီ"),
+    (r"ထို", "ဟို"),
+
+    # Plural + particle combinations
+    (r"များသည်", "တွေဟာ"),
+    (r"များအား", "တွေကို"),
+    (r"များတွင်|များ၌", "တွေမှာ"),
+    (r"များ၏", "တွေရဲ့"),
+    (r"များ", "တွေ"),
+
+    # Particles & case markers
+    (r"၌", "မှာ"),
+    (r"တွင်(?=[။၊\s]|$)", "မှာ"),
+    (r"နှင့်", "နဲ့"),
+    (r"လျှင်", "ရင်"),
+    (r"၏(?=[က-အ\s]|$)", "ရဲ့"),
+    (r"ဖြင့်(?=[။၊\s]|$)", "နဲ့"),
+
+    # Prohibitive / negative ending
+    (r"စေနှင့်", "ပါစေနဲ့"),
+
+    # Sentence ending declarative / future particles
+    (r"သည်(?=[။၊\s]|$)", "တယ်"),
+    (r"မည်(?=[။၊\s]|$)", "မယ်"),
+]
+
+
+def normalize_burmese_spoken(text):
+    """Convert residual formal literary particles (စာပေဟန်) into natural spoken forms (စကားပြောဟန်)."""
+    for pattern, repl in SPOKEN_CONVERSIONS:
+        text = re.sub(pattern, repl, text)
+    return text
+
+
 def format_burmese_for_speech(text):
     """Format Burmese text specifically for natural neural TTS prosody.
-    Adds breathing spaces around English loanwords, inserts natural pauses,
-    and ensures proper sentence-ending cadence."""
+    Converts literary particles to spoken Burmese, adds breathing spaces around
+    English loanwords, inserts natural pauses, and ensures proper sentence-ending cadence."""
     if not text:
         return ""
     # 0. Say English words the Burmese way. Must come first: everything below
     #    keys off which script a character is in.
     text = transliterate_terms(text)
-    # 1. Add breathing spaces around Latin/English words inside Burmese text
+    # 1. Enforce colloquial spoken Burmese register
+    text = normalize_burmese_spoken(text)
+    # 2. Add breathing spaces around Latin/English words inside Burmese text
     text = re.sub(r"([a-zA-Z0-9]+)([\u1000-\u109F\uAA60-\uAA7F])", r"\1 \2", text)
     text = re.sub(r"([\u1000-\u109F\uAA60-\uAA7F])([a-zA-Z0-9]+)", r"\1 \2", text)
-    # 2. Convert English periods/commas to Myanmar punctuation when preceded by Burmese
+    # 3. Convert English periods/commas to Myanmar punctuation when preceded by Burmese
     text = re.sub(r"([\u1000-\u109F\uAA60-\uAA7F])\s*\.\s*", r"\1။ ", text)
     text = re.sub(r"([\u1000-\u109F\uAA60-\uAA7F])\s*,\s*", r"\1၊ ", text)
-    # 3. Ensure sentence ends with Myanmar full stop for natural falling intonation
+    # 4. Ensure sentence ends with Myanmar full stop for natural falling intonation
     text = text.strip()
     if text and ('\u1000' <= text[-1] <= '\u109F'):
         text += "။"
-    # 4. Clean consecutive punctuation
+    # 5. Clean consecutive punctuation
     text = re.sub(r"([။၊])\1+", r"\1", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
@@ -1319,186 +1379,60 @@ class Mouth:
         buf and out.append(buf)
         return out or [text]
 
-    def _speak_burmese_google(self, text, on_level=None):
-        """Synthesize Burmese using Google's Free 24kHz Speech Engine (soft, natural tone)."""
-        import io, urllib.request, urllib.parse
-        import numpy as np, sounddevice as sd, soundfile as sf
-        try:
-            sentences = [s.strip() for s in text.replace("\n", " ").split("။") if s.strip()]
-            if not sentences:
-                sentences = [text]
-            all_samples = []
-            sample_rate = 24000
-            for s in sentences:
-                if not s.endswith("။"):
-                    s += "။"
-                params = urllib.parse.urlencode({
-                    "ie": "UTF-8",
-                    "q": s,
-                    "tl": "my",
-                    "client": "tw-ob"
-                })
-                url = f"https://translate.google.com/translate_tts?{params}"
-                headers = {"User-Agent": "Mozilla/5.0"}
-                req = urllib.request.Request(url, headers=headers)
-                with urllib.request.urlopen(req, timeout=6) as resp:
-                    audio, rate = sf.read(io.BytesIO(resp.read()), dtype="float32")
-                    if audio.ndim > 1:
-                        audio = audio.mean(axis=1)
-                    sample_rate = rate
-                    all_samples.append(audio)
-            
-            if not all_samples:
-                return False
-            
-            full_audio = np.concatenate(all_samples)
-            block = 1024
-            with sd.OutputStream(samplerate=sample_rate, channels=1, dtype="float32") as out:
-                for i in range(0, len(full_audio), block):
-                    if self.stop_flag.is_set():
-                        break
-                    b = full_audio[i:i + block].astype("float32")
-                    if on_level:
-                        on_level(min(1.0, float(np.sqrt(np.mean(np.square(b)))) * 4))
-                    out.write(b.reshape(-1, 1))
-            return True
-        except Exception as e:
-            log("tts", f"{C['am']}Google Burmese TTS failed ({e}); falling back to Edge-TTS{C['x']}", "am")
-            return False
+    def _synth_burmese(self, text):
+        """Render Burmese via Emotion & Prosody pipeline with Microsoft Edge-TTS."""
+        return self._synth_burmese_emotional(text)
 
-    # ── Burmese TTS, primary is Gemini when a Google key is configured ──
-    # Gemini has 30+ prebuilt voices and speaks Burmese; the older
-    # texttospeech.googleapis.com does not. Falls back to Edge for a missing
-    # key, a bad key or a network blip.
-
-    # Persona → Gemini voice, chosen for a distinct character each. Face
-    # config can override via voice.my_gemini.
-    GEMINI_VOICES = {
-        "aung": "Puck",         # young male, upbeat
-        "hnin": "Aoede",        # young female, breezy
-        "zaw":  "Charon",       # adult male, informative
-        "mya":  "Kore",         # adult female, firm
-        "uba":  "Sadaltager",   # older male, knowledgeable
-    }
-    GEMINI_DEFAULT = {"male": "Charon", "female": "Kore"}
-    GEMINI_MODEL = "gemini-2.5-flash-preview-tts"
-    GEMINI_URL = ("https://generativelanguage.googleapis.com/v1beta/models/"
-                  "{model}:generateContent?key={key}")
-    # Accept both key formats Google issues. AIzaSy… is the older one; AQ.…
-    # is the format AI Studio has started giving out. A key that begins with
-    # anything else is not a Google key and should not reach this endpoint.
-    GOOGLE_KEY_PREFIXES = ("AIzaSy", "AQ.")
-
-    @staticmethod
-    def _looks_like_google_key(k):
-        return isinstance(k, str) and any(
-            k.startswith(p) for p in Mouth.GOOGLE_KEY_PREFIXES)
-
-    def _synth_burmese_gemini(self, text):
-        """Google Gemini TTS. Returns (audio, rate) or None."""
-        import base64, urllib.request
-        import numpy as np
-
-        key = (bus.config().get("tts", {}) or {}).get("api_key", "").strip()
-        if not self._looks_like_google_key(key):
-            return None
-        if time.time() < getattr(self, "_gemini_cooldown_until", 0):
+    def _synth_burmese_emotional(self, text):
+        """Render Burmese text through the Emotion Analyzer & Prosody Injector pipeline.
+        Segments text into emotional clauses, synthesizes each with dynamic pitch/rate,
+        and injects natural breathing pause silences between them.
+        """
+        if not text or not text.strip():
             return None
 
         f = bus.face()
-        fid = f.get("id", "")
         v = (f.get("voice") or {})
-        gender = "female" if f.get("gender") == "female" else "male"
-        voice_name = (v.get("my_gemini")
-                      or self.GEMINI_VOICES.get(fid)
-                      or self.GEMINI_DEFAULT[gender])
+        base_rate = v.get("my_rate", "-2%")
+        base_pitch = v.get("my_pitch", "+0Hz")
 
-        # Gemini takes rate/pitch as instructions to the model, not as knobs.
-        # Personas already differ by voice character, so nothing extra needed.
-        payload = {
-            "contents": [{"parts": [{"text": text}]}],
-            "generationConfig": {
-                "responseModalities": ["AUDIO"],
-                "speechConfig": {
-                    "voiceConfig": {
-                        "prebuiltVoiceConfig": {"voiceName": voice_name}
-                    }
-                },
-            },
-        }
-        url = self.GEMINI_URL.format(model=self.GEMINI_MODEL, key=key)
-        req = urllib.request.Request(
-            url, data=json.dumps(payload).encode(),
-            headers={"Content-Type": "application/json"}, method="POST")
-        last = None
-        for attempt in range(SYNTH_TRIES):
-            try:
-                with urllib.request.urlopen(req, timeout=SYNTH_TIMEOUT) as r:
-                    body = json.loads(r.read())
-                cand = (body.get("candidates") or [{}])[0]
-                parts = (cand.get("content") or {}).get("parts") or []
-                inline = parts[0].get("inlineData") if parts else None
-                if not inline or not inline.get("data"):
-                    # transient — the model sometimes returns finishReason
-                    # OTHER with no audio, and retrying gets it
-                    last = f"empty response ({cand.get('finishReason','?')})"
-                    continue
-                # audio/L16;codec=pcm;rate=24000 — signed 16-bit little-endian
-                pcm = base64.b64decode(inline["data"])
-                audio = np.frombuffer(pcm, dtype="<i2").astype("float32") / 32768.0
-                mime = inline.get("mimeType", "")
-                rate_hz = 24000
-                if "rate=" in mime:
-                    try:
-                        rate_hz = int(mime.split("rate=")[1].split(";")[0])
-                    except (ValueError, IndexError):
-                        pass
-                if attempt:
-                    log("tts", f"{C['dim']}gemini recovered on attempt "
-                               f"{attempt + 1}{C['x']}", "dim")
-                return audio, rate_hz
-            except urllib.error.HTTPError as e:
-                # Terminal codes: no point burning attempts on a bad key or a
-                # missing voice. 429 is terminal *for this reply*: retrying it
-                # immediately just spends more of a quota that is already empty.
-                if e.code in (400, 401, 403, 404):
-                    detail = e.read()[:200].decode("utf-8", errors="replace")
-                    log("tts", f"{C['am']}gemini refused ({e.code}): "
-                               f"{detail}{C['x']}", "am")
-                    return None
-                if e.code == 429:
-                    # Cool off long enough that the rest of this turn goes to
-                    # Edge, and the next turn tries Gemini again. Free-tier
-                    # quotas are per-minute so a minute is the right length.
-                    self._gemini_cooldown_until = time.time() + 60
-                    log("tts", f"{C['am']}gemini rate-limited (429); "
-                               f"using Edge for the next minute{C['x']}", "am")
-                    return None
-                last = e
-            except Exception as e:
-                last = e
-        log("tts", f"{C['am']}gemini failed after {SYNTH_TRIES} tries "
-                   f"({last}); falling back to Edge{C['x']}", "am")
-        return None
+        if not emotion:
+            return self._synth_burmese_edge_bytes(text, pitch=base_pitch, rate=base_rate)
 
-    def _synth_burmese(self, text):
-        """Render Burmese to samples. Try Gemini first, fall back to Edge.
+        chunks = emotion.ProsodyInjector.inject_prosody_chunks(
+            text, base_pitch=base_pitch, base_rate=base_rate
+        )
+        if not chunks:
+            return self._synth_burmese_edge_bytes(text, pitch=base_pitch, rate=base_rate)
 
-        A Google key sets the primary — 30+ voices instead of Edge's two — but
-        the free Edge path is always there so a missing key, a bad key, or a
-        network blip does not leave him mute.
-        """
-        got = self._synth_burmese_gemini(text)
-        if got:
-            return got
-        return self._synth_burmese_edge_bytes(text)
+        import numpy as np
+        all_audio = []
+        sample_rate = 24000
 
-    def _synth_burmese_edge_bytes(self, text):
-        """Render Burmese via Microsoft Edge-TTS. Returns (audio, rate) or None.
+        for i, chunk in enumerate(chunks):
+            if self.stop_flag.is_set():
+                break
+            got = self._synth_burmese_edge_bytes(chunk.text, pitch=chunk.pitch, rate=chunk.rate)
+            if got:
+                audio, rate_hz = got
+                sample_rate = rate_hz
+                all_audio.append(audio)
+                # Inject breathing pause between clauses/sentences if not the last chunk
+                if i < len(chunks) - 1 and chunk.break_ms > 0:
+                    silence_samples = int(sample_rate * (chunk.break_ms / 1000.0))
+                    all_audio.append(np.zeros(silence_samples, dtype=np.float32))
 
-        Free but only two voices exist — Thiha and Nilar — so five personas
-        share them via rate and pitch. The primary path is Google Cloud when a
-        key is configured; this is the fallback.
+        if not all_audio:
+            return None
+
+        combined = np.concatenate(all_audio)
+        return combined, sample_rate
+
+    def _synth_burmese_edge_bytes(self, text, pitch=None, rate=None):
+        """Render a single clause/piece via Microsoft Edge-TTS. Returns (audio, rate) or None.
+
+        Free native neural voices — Thiha and Nilar — modulated across personas
+        and emotions via customized rate and pitch.
         """
         import asyncio, tempfile
         import numpy as np, soundfile as sf
@@ -1513,8 +1447,8 @@ class Mouth:
         gender = f.get("gender", "male")
         default_my = "my-MM-NilarNeural" if gender == "female" else "my-MM-ThihaNeural"
         voice = v.get("my", default_my)
-        rate = v.get("my_rate", "-2%")
-        pitch = v.get("my_pitch", "+0Hz")
+        rate = rate or v.get("my_rate", "-2%")
+        pitch = pitch or v.get("my_pitch", "+0Hz")
         # A reply is several requests now rather than one, so a blip that used
         # to cost a whole answer once in a while now gets several chances to
         # land in the middle of one — and a missing piece sounds exactly like
@@ -1710,14 +1644,7 @@ class Mouth:
                     whole = format_burmese_for_speech(clean_spoken_text(piece))
                     if not whole.strip():
                         continue
-                    # If a Google key is configured and Gemini is not on
-                    # cooldown, send the whole piece as one request — Gemini's
-                    # free tier is 10 RPM and each unit was another request.
-                    key = (bus.config().get("tts", {}) or {}).get("api_key", "").strip()
-                    gemini_up = (self._looks_like_google_key(key) and
-                                 time.time() >= getattr(self,
-                                     "_gemini_cooldown_until", 0))
-                    units = [whole] if gemini_up else self._stream_units(whole)
+                    units = self._stream_units(whole)
                     for text in units:
                         if self.stop_flag.is_set():
                             break

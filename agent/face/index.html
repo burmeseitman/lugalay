@@ -166,16 +166,14 @@
     <label for="cfg_face">Voice &amp; Face</label>
     <select id="cfg_face"></select>
 
-    <label for="cfg_key">Voice API Key <span style="text-transform:none;opacity:.6">· Optional, for better Burmese voices</span></label>
+    <label for="cfg_key">Voice API Key <span style="text-transform:none;opacity:.6">· Optional</span></label>
     <div class="key-row">
-      <input type="password" id="cfg_key" autocomplete="off" placeholder="AIzaSy… or AQ.… (Google Gemini TTS · recommended)">
+      <input type="password" id="cfg_key" autocomplete="off" placeholder="Leave empty for free Microsoft Edge-TTS">
       <button class="eye-btn" id="cfg_eye" type="button" title="Toggle visibility">👁</button>
     </div>
     <div class="provider-badge" id="cfg_provider">Active: Microsoft Edge-TTS (Free)</div>
     <div style="font-size:11px;opacity:.6;margin-top:4px;line-height:1.5">
-      Auto-detected by prefix: <b>AIzaSy…</b>/<b>AQ.…</b> Google Gemini (30+ voices, best quality) ·
-      <b>sk-…</b> OpenAI · anything else ElevenLabs.
-      Leave empty for free Microsoft Edge-TTS.
+      Default: <b>Microsoft Edge-TTS</b> (Free, native Burmese). Optional: <b>sk-…</b> OpenAI · anything else ElevenLabs.
     </div>
 
     <div style="margin-top:14px">

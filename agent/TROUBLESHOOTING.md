@@ -238,46 +238,43 @@ over if one is available. Set `engine` to `auto` for Claude first, hosted
 second, local third — but that only fires when Claude itself is broken; a
 working Claude is preferred over any hosted alternative.
 
-## Better Burmese voices via Google Cloud TTS
+## Burmese Voices & Persona Tuning (Edge-TTS)
 
-Microsoft Edge only ships two Burmese voices, so the five personas share
-them via rate and pitch — which is why they all sound similar. Google Cloud
-has four (Wavenet A/B, Standard A/B) and better quality; enabling it makes
-each persona sound distinctly its own.
+Microsoft Edge-TTS powers native Burmese speech for all personas. You can customize the pitch, rate, and character tone for each persona in `agent/config.json`:
 
-**Setup:**
+```json
+{
+  "faces": [
+    {
+      "id": "aung",
+      "voice": {
+        "my": "my-MM-ThihaNeural",
+        "my_rate": "+2%",
+        "my_pitch": "+0Hz"
+      }
+    },
+    {
+      "id": "hnin",
+      "voice": {
+        "my": "my-MM-NilarNeural",
+        "my_rate": "+0%",
+        "my_pitch": "+1Hz"
+      }
+    },
+    {
+      "id": "uba",
+      "voice": {
+        "my": "my-MM-ThihaNeural",
+        "my_rate": "-6%",
+        "my_pitch": "-7Hz"
+      }
+    }
+  ]
+}
+```
 
-1. Open <https://console.cloud.google.com>, pick a project (or make one).
-2. Search for "Cloud Text-to-Speech API" and enable it.
-3. Under APIs & Services → Credentials, create an API key.
-4. Paste it into `agent/config.json` (or `~/Lugalay/agent/config.json` for
-   the packaged app):
-
-   ```
-   "tts": { "api_key": "AIzaSy..." }
-   ```
-
-Restart the app. Nothing else to do — the key is auto-detected by its
-`AIzaSy` prefix and Google Cloud becomes primary; Edge stays as the fallback
-for a bad key, a rate limit or a network blip.
-
-**Free tier:** 4M chars/month for Standard voices, 1M for Wavenet. A daily
-conversation is orders of magnitude below either.
-
-**Persona → voice mapping:**
-
-| persona | voice base |
-|---|---|
-| Aung, Zaw | Wavenet-A (male, younger) |
-| U Ba | Standard-A (male, older — sounds distinct) |
-| Hnin | Wavenet-B (female, younger) |
-| Mya | Wavenet-B (female, tweaked older) |
-
-Override per persona with `voice.my_google` in the face config.
-
-**Troubleshooting:** the log tags TTS attempts. A `gcloud refused (400)` line
-usually means the key is wrong or the API is not enabled on that project.
-`gcloud refused (429)` is a rate limit. Both fall back to Edge automatically.
+* **Rate (`my_rate`)**: Adjust speed (e.g. `+2%`, `-4%`).
+* **Pitch (`my_pitch`)**: Adjust vocal pitch (e.g. `+2Hz`, `-6Hz` for deeper voice).
 
 ## Ports already in use
 

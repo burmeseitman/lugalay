@@ -308,16 +308,11 @@ check("remote path speaks the tool loop too", "_remote_tool_round" in _vsrc)
 check("presets available for common providers",
       all(n in _vsrc for n in ("openai", "groq", "together", "openrouter", "deepseek")))
 _dcfg = json.load(open(os.path.join(AGENT, "config.default.json"), encoding="utf-8"))
-# ── Burmese TTS chain: Google Cloud primary, Edge fallback
-check("google gemini tts implemented",
-      "_synth_burmese_gemini" in _vsrc
-      and "generativelanguage.googleapis.com" in _vsrc)
-check("gemini accepts both AIzaSy and AQ. key formats",
-      "GOOGLE_KEY_PREFIXES" in _vsrc and "AQ." in _vsrc)
-check("tts falls back when gcloud returns nothing",
-      "_synth_burmese_edge_bytes(text)" in _vsrc)
-check("bad api keys short-circuit rather than burn retries",
-      "in (400, 401, 403, 404)" in _vsrc)
+# ── Burmese TTS: Microsoft Edge-TTS with Emotion & Prosody pipeline
+check("burmese edge-tts implemented",
+      "_synth_burmese_edge_bytes" in _vsrc and "edge_tts" in _vsrc)
+check("burmese emotional prosody pipeline wired",
+      "_synth_burmese_emotional" in _vsrc and "ProsodyInjector" in _vsrc)
 
 check("brain.remote in the shipped default", "remote" in _dcfg.get("brain", {}))
 

@@ -48,10 +48,6 @@ class Handler(BaseHTTPRequestHandler):
             if raw_key:
                 if raw_key.startswith("sk-"):
                     provider = "OpenAI TTS (tts-1)"
-                elif raw_key.startswith("AIzaSy") or raw_key.startswith("AQ."):
-                    # AI Studio has started issuing AQ.… keys; both formats
-                    # authenticate to Gemini TTS the same way
-                    provider = "Google Gemini TTS"
                 else:
                     provider = "ElevenLabs Multilingual v2"
                 masked = ("•" * 16) + (raw_key[-4:] if len(raw_key) > 4 else "")

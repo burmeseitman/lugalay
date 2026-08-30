@@ -32,7 +32,7 @@ for name in ("bus.py", "setup.py", "fetch_models.py"):
     datas.append((os.path.join(ROOT, "agent", name), "agent"))
 
 # the voice package, minus its virtualenv and its multi-gigabyte models
-for name in ("voice.py", "tools.py", "requirements.txt", "mictest.py", "langtest.py",
+for name in ("voice.py", "emotion.py", "tools.py", "requirements.txt", "mictest.py", "langtest.py",
              "tune_my.py", "keytest.py", "diagnose.sh"):
     src = os.path.join(ROOT, "agent", "voice", name)
     if os.path.exists(src):
