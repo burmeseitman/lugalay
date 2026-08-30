@@ -1199,8 +1199,12 @@ def burmese_terms():
     the instruction about half the time and invents bad spellings the other
     half. This table is the guarantee behind that request.
     """
-    for path in (os.path.join(bus.ROOT, "voice", "prompts", "burmese_terms.txt"),
-                 bus.resource("voice", "prompts", "burmese_terms.txt")):
+    paths = [
+        os.path.join(os.path.expanduser("~"), "Lugalay", "agent", "voice", "prompts", "burmese_terms.txt"),
+        os.path.join(bus.ROOT, "voice", "prompts", "burmese_terms.txt"),
+        bus.resource("voice", "prompts", "burmese_terms.txt"),
+    ]
+    for path in paths:
         try:
             mtime = os.path.getmtime(path)
         except OSError:
@@ -1229,8 +1233,8 @@ def burmese_terms():
 def transliterate_terms(text):
     """Swap known English words for how they are actually said in Burmese."""
     for en, my in burmese_terms():
-        # \b does not fit words with hyphens in them, so bound on non-letters
-        text = re.sub(rf"(?<![A-Za-z]){re.escape(en)}(?![A-Za-z])", my, text,
+        # Bound on non-alphanumeric to handle terms with numbers (e.g. A24, 4K, MP3)
+        text = re.sub(rf"(?<![A-Za-z0-9]){re.escape(en)}(?![A-Za-z0-9])", my, text,
                       flags=re.IGNORECASE)
     return text
 
@@ -1291,12 +1295,24 @@ def normalize_burmese_spoken(text):
             text = re.sub(r"ဟုတ်ကဲ့ရှင့်", "ဟုတ်ကဲ့ခင်ဗျာ", text)
             text = re.sub(r"ပါရှင့်", "ပါခင်ဗျာ", text)
             text = re.sub(r"ရှင့်", "ခင်ဗျာ", text)
-            text = re.sub(r"ရှင်(?=[။၊\s]|$)", "ဗျာ", text)
+            text = re.sub(r"([က-အ])ပါရှင်(?=[။၊\s]|$)", r"\1ပါခင်ဗျာ", text)
+            text = re.sub(r"([က-အ])တယ်ရှင်(?=[။၊\s]|$)", r"\1တယ်ခင်ဗျာ", text)
+            text = re.sub(r"([က-အ])မယ်ရှင်(?=[။၊\s]|$)", r"\1မယ်ခင်ဗျာ", text)
+            text = re.sub(r"([က-အ])လားရှင်(?=[။၊\s]|$)", r"\1လားခင်ဗျာ", text)
+            text = re.sub(r"([က-အ])နော်ရှင်(?=[။၊\s]|$)", r"\1နော်ခင်ဗျာ", text)
+            text = re.sub(r"([က-အ])ပေါ့ရှင်(?=[။၊\s]|$)", r"\1ပေါ့ခင်ဗျာ", text)
+            text = re.sub(r"(?<![\u1000-\u109F\uAA60-\uAA7F])ရှင်(?=[။၊\s]|$)", "ဗျာ", text)
         else:
             text = re.sub(r"ဟုတ်ကဲ့ခင်ဗျာ", "ဟုတ်ကဲ့ရှင့်", text)
             text = re.sub(r"ပါခင်ဗျာ", "ပါရှင့်", text)
             text = re.sub(r"ခင်ဗျာ", "ရှင့်", text)
-            text = re.sub(r"ဗျာ(?=[။၊\s]|$)", "ရှင်", text)
+            text = re.sub(r"([က-အ])ပါဗျာ(?=[။၊\s]|$)", r"\1ပါရှင့်", text)
+            text = re.sub(r"([က-အ])တယ်ဗျာ(?=[။၊\s]|$)", r"\1တယ်ရှင့်", text)
+            text = re.sub(r"([က-အ])မယ်ဗျာ(?=[။၊\s]|$)", r"\1မယ်ရှင့်", text)
+            text = re.sub(r"([က-အ])လားဗျာ(?=[။၊\s]|$)", r"\1လားရှင့်", text)
+            text = re.sub(r"([က-အ])နော်ဗျာ(?=[။၊\s]|$)", r"\1နော်ရှင့်", text)
+            text = re.sub(r"([က-အ])ပေါ့ဗျာ(?=[။၊\s]|$)", r"\1ပေါ့ရှင့်", text)
+            text = re.sub(r"(?<![\u1000-\u109F\uAA60-\uAA7F])ဗျာ(?=[။၊\s]|$)", "ရှင်", text)
     except Exception:
         pass
 
