@@ -36,9 +36,20 @@ def resource(*parts):
 
 def ensure_home():
     """Create the writable side on first launch of a packaged build."""
+    prompts_dir = os.path.join(ROOT, "voice", "prompts")
     for d in (ROOT, os.path.dirname(BUS), LOGS, MODELS,
-              os.path.join(HOME, "memory")):
+              os.path.join(HOME, "memory"), prompts_dir):
         os.makedirs(d, exist_ok=True)
+    # Seed default prompt files so the user can easily customize and add words
+    for name in ("burmese_terms.txt", "spoken_burmese.md"):
+        dest = os.path.join(prompts_dir, name)
+        src = resource("voice", "prompts", name)
+        if not os.path.exists(dest) and os.path.exists(src):
+            try:
+                import shutil
+                shutil.copy2(src, dest)
+            except OSError:
+                pass
     return HOME
 
 # ── who is allowed to talk to the local servers ───────────────────────────
