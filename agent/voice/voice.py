@@ -1230,12 +1230,89 @@ def burmese_terms():
     return []
 
 
+COMMON_ENGLISH_PHONETICS = [
+    ("pro max", "ပရို မက်စ်"),
+    ("pro", "ပရို"),
+    ("max", "မက်စ်"),
+    ("plus", "ပလပ်စ်"),
+    ("ultra", "အာထရာ"),
+    ("mini", "မီနီ"),
+    ("air", "အဲယား"),
+    ("studio", "စတူဒီယို"),
+    ("channel", "ချန်နယ်"),
+    ("version", "ဗားရှင်း"),
+    ("system", "စနစ်"),
+    ("feature", "ဖန်ရှင်"),
+    ("service", "ဆားဗစ်"),
+    ("center", "စင်တာ"),
+    ("store", "စတိုး"),
+    ("shop", "ဆိုင်"),
+    ("music", "မြူးဇစ်"),
+    ("song", "သီချင်း"),
+    ("audio", "အသံ"),
+    ("sound", "ဆောင်းဒ်"),
+    ("game", "ဂိမ်း"),
+    ("player", "ပလေယာ"),
+    ("team", "အသင်း"),
+    ("group", "ဂရု"),
+    ("post", "ပို့စ်"),
+    ("page", "ပေ့ခ်ျ"),
+    ("link", "လင့်ခ်"),
+    ("website", "ဝဘ်ဆိုဒ်"),
+    ("online", "အွန်လိုင်း"),
+    ("offline", "အော့ဖ်လိုင်း"),
+    ("bluetooth", "ဘလူးတုသ်"),
+    ("podcast", "ပေါ့ဒ်ကတ်စ်"),
+    ("netflix", "နက်ဖလစ်"),
+    ("spotify", "စပေါ့တီဖိုင်"),
+    ("google", "ဂူဂဲလ်"),
+    ("facebook", "ဖေ့စ်ဘွတ်ခ်"),
+    ("iphone", "အိုင်ဖုန်း"),
+    ("macbook", "မက်ဘွတ်"),
+    ("apple", "အက်ပဲလ်"),
+    ("android", "အန်းဒရွိုက်"),
+    ("windows", "ဝင်းဒိုး"),
+    ("chatgpt", "ချက် ဂျီပီတီ"),
+    ("gpt", "ဂျီပီတီ"),
+    ("claude", "ကလော့ဒ်"),
+    ("gemini", "ဂျမနိုင်"),
+    ("meta", "မေတာ"),
+    ("openai", "အိုပန် အေအိုင်"),
+    ("ai", "အေအိုင်"),
+    ("ok", "အိုကေ"),
+    ("hi", "ဟိုင်း"),
+    ("hello", "ဟယ်လို"),
+    ("bye", "တာ့တာ"),
+]
+
+LETTER_MAP = {
+    "a": "အေ", "b": "ဘီ", "c": "စီ", "d": "ဒီ", "e": "အီး",
+    "f": "အက်ဖ်", "g": "ဂျီ", "h": "အိတ်ချ်", "i": "အိုင်", "j": "ဂျေ",
+    "k": "ကေ", "l": "အယ်လ်", "m": "အမ်", "n": "အင်", "o": "အို",
+    "p": "ပီ", "q": "ကျူး", "r": "အာ", "s": "အက်စ်", "t": "တီ",
+    "u": "ယူ", "v": "ဗီ", "w": "ဒဗလျူ", "x": "အက်စ်", "y": "ဝိုင်", "z": "ဇက်"
+}
+
+
 def transliterate_terms(text):
-    """Swap known English words for how they are actually said in Burmese."""
+    """Swap English words for how they are actually said in Burmese.
+    Multi-tier pipeline: burmese_terms.txt -> common tech vocabulary -> standalone Latin letters."""
+    # Tier 1: User & repository custom burmese_terms.txt
     for en, my in burmese_terms():
-        # Bound on non-alphanumeric to handle terms with numbers (e.g. A24, 4K, MP3)
         text = re.sub(rf"(?<![A-Za-z0-9]){re.escape(en)}(?![A-Za-z0-9])", my, text,
                       flags=re.IGNORECASE)
+
+    # Tier 2: Built-in common English & technology words
+    for en, my in COMMON_ENGLISH_PHONETICS:
+        text = re.sub(rf"(?<![A-Za-z0-9]){re.escape(en)}(?![A-Za-z0-9])", my, text,
+                      flags=re.IGNORECASE)
+
+    # Tier 3: Standalone English letters (e.g. Model X, Plan B, A24)
+    def repl_letter(m):
+        c = m.group(0).lower()
+        return LETTER_MAP.get(c, m.group(0))
+    text = re.sub(r"(?<![A-Za-z0-9])[A-Za-z](?![A-Za-z0-9])", repl_letter, text)
+
     return text
 
 
