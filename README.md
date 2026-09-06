@@ -7,23 +7,43 @@
 A personal AI desktop companion for macOS: a **mind**, a **mouth**, a **face**, a pair of **hands**, and a set of **eyes**. It listens in Burmese and English, answers with natural colloquial spoken rhythm, and watches you from an animated pixel avatar. 
 
 ```mermaid
-flowchart TD
-    User([🎙️ You Speak]) --> STT[Faster-Whisper / Google STT]
-    
-    STT --> Brain[🧠 Brain: OpenAI Codex Plus / Claude / Ollama]
-    Brain --> Normalizer[📝 Diglossia Normalizer & Transliteration]
-    
-    Normalizer -->|English| Kokoro[🇺🇸 Kokoro-82M ONNX Local TTS]
-    Normalizer -->|Burmese| BurmeseTTS{TTS Provider}
-    
-    BurmeseTTS -->|Primary| Gemini[✨ Gemini 2.5 Flash Expressive TTS]
-    BurmeseTTS -->|Free Fallback| Edge[⚡ Microsoft Edge-TTS]
-    
-    Kokoro --> Bus[(agent/bus/state.json)]
-    Gemini --> Bus
-    Edge --> Bus
-    
-    Bus --> UI[🎭 Animated Face & Settings UI]
+flowchart TB
+    subgraph Perception ["👁️ Perception & Input Layer"]
+        Mic["🎙️ Microphone Voice"] --> STT["🎧 Faster-Whisper / Google STT"]
+        Cam["📷 Camera Feed"] --> Eyes["👁️ Eyes (OpenCV Frame Capture)"]
+        Gest["🖐️ Video Stream"] --> Hands["✋ MediaPipe WASM (Hand Gestures)"]
+    end
+
+    subgraph CoreBrain ["🧠 Cognitive Brain & Memory System"]
+        STT --> Brain["🧠 LLM Brain Engine<br/>(OpenAI Codex Plus / Claude / Gemini / Ollama)"]
+        Eyes -.->|Visual QA Frame| Brain
+        
+        Brain <-->|read_memory / remember| MemVault[("💾 Obsidian Memory Vault<br/>• profile.md (User Context)<br/>• projects/*.md (Tasks)<br/>• daily/YYYY-MM-DD.md<br/>• lessons & people")]
+    end
+
+    subgraph ActionTools ["⚡ Tool Execution Engine"]
+        Brain -->|Tool Calling| Tools{"🛠️ Tool Dispatcher"}
+        Tools -->|open_page| Browser["🌐 Browser / YouTube / Web"]
+        Tools -->|show_card| Board["📋 Hands Presentation Board"]
+    end
+
+    subgraph Linguistic ["📝 Linguistic & Expression Normalizer"]
+        Brain --> Normalizer["📝 Diglossia Normalizer<br/>(Literary ➔ Colloquial Spoken Burmese & 300+ Tech Phonetics)"]
+        Normalizer --> Emotion["🎭 Persona & Emotion Engine<br/>(5 Persona Profiles)"]
+    end
+
+    subgraph SpeechSynthesis ["🗣️ Speech Synthesis (Mouth)"]
+        Emotion -->|Burmese Primary| GeminiTTS["✨ Gemini 2.5 Flash Expressive TTS"]
+        Emotion -->|Burmese Fallback| EdgeTTS["⚡ Microsoft Edge-TTS (Thiha / Nilar)"]
+        Emotion -->|English Spoken| KokoroTTS["🇺🇸 Kokoro-82M ONNX Local TTS"]
+    end
+
+    subgraph SyncUI ["🎭 Realtime Event Bus & Display"]
+        GeminiTTS & EdgeTTS & KokoroTTS --> Bus[("📡 agent/bus/state.json<br/>(Audio & State IPC Bus)")]
+        Hands --> Bus
+        Bus --> FaceUI["🎭 PyWebView Desktop Interface<br/>• Animated Pixel Avatar (Lipsync & Eyes)<br/>• In-App Settings Modal (S key)<br/>• Overlay Transparent Desktop Mode (B key)"]
+        Board --> FaceUI
+    end
 ```
 
 ---
@@ -34,6 +54,7 @@ flowchart TD
 |---|---|
 | **Core & Desktop Engine** | ![Python](https://img.shields.io/badge/Python_3.12-3776AB?style=flat-square&logo=python&logoColor=white) ![PyWebView](https://img.shields.io/badge/PyWebView-1B1F23?style=flat-square) ![macOS](https://img.shields.io/badge/macOS-000000?style=flat-square&logo=apple&logoColor=white) ![NumPy](https://img.shields.io/badge/NumPy-013243?style=flat-square&logo=numpy&logoColor=white) |
 | **Brain & Reasoning LLMs** | ![OpenAI Codex](https://img.shields.io/badge/OpenAI_Codex_Plus_/_GPT--4o-412991?style=flat-square&logo=openai&logoColor=white) ![Claude](https://img.shields.io/badge/Anthropic_Claude-D97706?style=flat-square&logo=anthropic&logoColor=white) ![Gemini](https://img.shields.io/badge/Google_Gemini-8E75C2?style=flat-square&logo=google&logoColor=white) ![Ollama](https://img.shields.io/badge/Ollama_(Qwen/LLaMA)-000000?style=flat-square&logo=ollama&logoColor=white) |
+| **Long-Term Memory** | ![Obsidian](https://img.shields.io/badge/Obsidian_Markdown_Vault-483699?style=flat-square&logo=obsidian&logoColor=white) ![IPC Bus](https://img.shields.io/badge/JSON_State_Bus-333333?style=flat-square) |
 | **Speech-to-Text (STT)** | ![Faster-Whisper](https://img.shields.io/badge/Faster--Whisper_(Local_int8)-000000?style=flat-square&logo=openai&logoColor=white) ![Google Speech](https://img.shields.io/badge/Google_Speech_STT-4285F4?style=flat-square&logo=google&logoColor=white) |
 | **Text-to-Speech (TTS)** | ![Gemini TTS](https://img.shields.io/badge/Gemini_2.5_Flash_TTS-8E75C2?style=flat-square&logo=google&logoColor=white) ![Microsoft Edge-TTS](https://img.shields.io/badge/Microsoft_Edge--TTS-0078D7?style=flat-square&logo=microsoft&logoColor=white) ![Kokoro ONNX](https://img.shields.io/badge/Kokoro--82M_ONNX-005CED?style=flat-square&logo=onnx&logoColor=white) |
 | **Vision & Gestures** | ![MediaPipe](https://img.shields.io/badge/Google_MediaPipe_WASM-0078D4?style=flat-square&logo=google&logoColor=white) ![OpenCV](https://img.shields.io/badge/OpenCV-5C3EE8?style=flat-square&logo=opencv&logoColor=white) |
@@ -90,12 +111,23 @@ Click the **`⚙ Settings`** button (or press **`S`**) at any time to customize:
 
 ---
 
-## 🧠 Brain Engines & Vision
+## 🧠 Brain Engines, Memory & Tools
 
 * **OpenAI Codex Plus (`engine: "codex"`)**: Runs headless via `codex exec --json` on your existing **ChatGPT / Codex Plus subscription** with zero API token overhead.
 * **Claude / Local Ollama Fallback**: Cascades gracefully to local offline models (`qwen3.6`, `llama3`) or Claude when offline.
-* **Eyes & Camera Vision**: Ask visual questions (*"Look at this"*, *"ဒီဟာကို ကြည့်ပေးပါ"*) to analyze camera frames in real time.
-* **Diglossia Normalizer**: Automatically converts literary Burmese (`သည်`, `မည်`, `၌`) into colloquial spoken prose (`တယ်`, `မယ်`, `မှာ`), enforces gender particles (`ခင်ဗျာ` vs `ရှင့်`), and applies 300+ phonetic transliterations for technical terms.
+* **💾 Long-Term Memory (Obsidian Vault)**: Stores persistent context across sessions in pure Markdown:
+  * `memory/profile.md`: User identity, background, preferences, and workflows.
+  * `memory/projects/*.md`: Active projects, architecture decisions, and task states.
+  * `memory/daily/YYYY-MM-DD.md`: Chronological daily summaries and conversations.
+  * `memory/lessons/*.md`: Rules, corrections, and guidelines.
+* **🛠️ Built-in Tool Calling**:
+  * `read_memory(topic)`: Autonomous memory recall to look up past context before answering.
+  * `remember(note, file)`: Writes durable facts and updates directly to the vault.
+  * `open_page(url)`: Opens web pages, YouTube videos, or research links directly in the browser upon request.
+  * `show_card(text, title)`: Generates and pins interactive notes/cards onto the visual presentation board.
+* **👁️ Eyes & Camera Vision**: Multimodal visual QA (*"Look at this"*, *"ဒီဟာကို ကြည့်ပေးပါ"*) capturing live OpenCV camera frames for instant reasoning.
+* **🖐️ Hands & Presentation Board**: Google MediaPipe WASM hand landmarker for real-time gesture control and canvas interaction.
+* **📝 Diglossia Normalizer**: Automatically converts literary Burmese (`သည်`, `မည်`, `၌`) into colloquial spoken prose (`တယ်`, `မယ်`, `မှာ`), enforces gender particles (`ခင်ဗျာ` vs `ရှင့်`), and applies 300+ phonetic transliterations for technical terms.
 
 ---
 
