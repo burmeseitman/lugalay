@@ -20,16 +20,13 @@ jobs:
       fail-fast: false     # one platform breaking must not hide the others
       matrix:
         include:
-          - os: macos-14
+          - os: macos-latest
             label: macOS (Apple Silicon)
             artifact: Lugalay-macos-arm64
-          - os: macos-13
-            label: macOS (Intel)
-            artifact: Lugalay-macos-x86_64
           - os: windows-latest
             label: Windows
             artifact: Lugalay-windows-x86_64
-          - os: ubuntu-22.04
+          - os: ubuntu-latest
             label: Linux
             artifact: Lugalay-linux-x86_64
 
@@ -48,7 +45,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             portaudio19-dev libasound2-dev libsndfile1 espeak-ng \
             libgirepository1.0-dev gir1.2-gtk-3.0 \
-            libcairo2-dev pkg-config python3-dev
+            libcairo2-dev pkg-config python3-dev meson ninja-build \
+            libasound2 libportaudio2
           sudo apt-get install -y gir1.2-webkit2-4.1 || sudo apt-get install -y gir1.2-webkit2-4.0 || true
 
       - name: macOS system packages
@@ -64,7 +62,9 @@ jobs:
 
       - name: Linux GTK bindings for pywebview
         if: runner.os == 'Linux'
-        run: pip install pygobject pycairo
+        run: |
+          pip install pycairo
+          pip install pygobject || sudo apt-get install -y python3-gi python3-gi-cairo
 
       - name: Windows WebView2 bindings for pywebview
         if: runner.os == 'Windows'
