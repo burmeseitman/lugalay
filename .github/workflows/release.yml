@@ -144,23 +144,16 @@ jobs:
             | Windows | `.zip` | unzip, run `Lugalay.exe`; SmartScreen → More info → Run anyway |
             | Linux | `.tar.gz` | extract, run `./Lugalay` |
 
-            ### Before it can think
+            ### Brain & Intelligence
 
-            Lugalay's brain is **Claude Code**, which you install separately and
-            log in once:
-
-            ```
-            npm install -g @anthropic-ai/claude-code && claude
-            ```
-
-            Without it the app still runs, listens and draws — it just has
-            nothing to say. A local Ollama model can stand in; see the README.
+            Lugalay supports:
+            * **OpenAI Codex CLI** (`codex` - runs on your ChatGPT / Codex Plus subscription)
+            * **Claude Code** (`claude` - `npm install -g @anthropic-ai/claude-code`)
+            * **Local Offline Models** (Ollama: `qwen3.6`, `llama3`)
+            * **Hosted APIs** (Gemini, OpenAI GPT-4o, DeepSeek, Groq)
 
             ### First run
 
-            The app asks your name, the assistant's name and your language, then
-            downloads the speech models (about 350MB). Burmese speech *input* is
-            an extra opt-in download — see `fetch_models.py --burmese`.
-
-            Microphone permission is required. Denied, capture returns silence
-            rather than an error, which looks exactly like a broken microphone.
+            The app asks your name, assistant name, and language settings, then
+            downloads the local speech models. Free Edge-TTS and Gemini 2.5 Flash TTS
+            are supported for Burmese voice output.
