@@ -23,6 +23,9 @@ jobs:
           - os: macos-latest
             label: macOS (Apple Silicon)
             artifact: Lugalay-macos-arm64
+          - os: macos-13
+            label: macOS (Intel)
+            artifact: Lugalay-macos-x86_64
           - os: windows-latest
             label: Windows
             artifact: Lugalay-windows-x86_64
