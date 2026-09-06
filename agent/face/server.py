@@ -42,6 +42,7 @@ class Handler(BaseHTTPRequestHandler):
             }))
         if path == "/settings":
             cfg = bus.config()
+            tts = cfg.get("tts", {})
             return self._send(200, json.dumps({
                 "user": cfg.get("user", ""),
                 "agent": cfg.get("name", "Lugalay"),
@@ -49,6 +50,11 @@ class Handler(BaseHTTPRequestHandler):
                 "speak_language": cfg.get("language", {}).get("reply", "my"),
                 "face": bus.face_id(),
                 "faces": bus.faces(),
+                # Never send the key back to the browser, even over loopback.
+                "gemini_key_saved": bool(
+                    tts.get("gemini_api_key") or tts.get("api_key")),
+                "gemini_key_from_environment": bool(
+                    os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")),
             }))
         if path == "/open-hands":
             import webbrowser
@@ -105,8 +111,22 @@ class Handler(BaseHTTPRequestHandler):
                     cfg.setdefault("language", {})["reply"] = data["language"]
                 if "face" in data and data["face"]:
                     bus.set_face(data["face"])
+                if ("gemini_api_key" in data
+                        or data.get("clear_gemini_api_key")):
+                    import setup as setup_mod
+                    setup_mod.set_gemini_api_key(
+                        cfg,
+                        data.get("gemini_api_key"),
+                        clear=bool(data.get("clear_gemini_api_key")),
+                    )
                 bus.save_config(cfg)
-                return self._send(200, json.dumps({"ok": True, "face": bus.face_id()}))
+                tts = cfg.get("tts", {})
+                return self._send(200, json.dumps({
+                    "ok": True,
+                    "face": bus.face_id(),
+                    "gemini_key_saved": bool(
+                        tts.get("gemini_api_key") or tts.get("api_key")),
+                }))
             except Exception as e:
                 return self._send(400, json.dumps({"error": str(e)}))
 
@@ -114,7 +134,7 @@ class Handler(BaseHTTPRequestHandler):
         # picking a persona here also picks the voice it answers in
         if path != "/face":
             return self._send(404, json.dumps({"error": "not found"}))
-        n = int(self.headers.get("Content-Length", 0))
+        n = min(int(self.headers.get("Content-Length", 0) or 0), 64 * 1024)
         try:
             fid = json.loads(self.rfile.read(n)).get("id")
             bus.set_face(fid)
@@ -135,7 +155,7 @@ def main():
             print(f"face:  already running on {url} — reusing it", flush=True)
             return 0
         raise
-    print(f"face:  {url}  ({CFG.get('face','board')})", flush=True)
+    print(f"face:  {url}  ({CFG.get('face','aung')})", flush=True)
     if "--no-open" not in sys.argv:
         threading.Timer(0.6, lambda: webbrowser.open(url)).start()
     try:

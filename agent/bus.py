@@ -41,8 +41,10 @@ def resource(*parts):
 def ensure_home():
     """Create the writable side on first launch of a packaged build."""
     prompts_dir = os.path.join(ROOT, "voice", "prompts")
+    hands_state = os.path.join(ROOT, "hands", "state")
+    eyes_frames = os.path.join(ROOT, "eyes", "frames")
     for d in (ROOT, os.path.dirname(BUS), LOGS, MODELS,
-              os.path.join(HOME, "memory"), prompts_dir):
+              os.path.join(HOME, "memory"), prompts_dir, hands_state, eyes_frames):
         os.makedirs(d, exist_ok=True)
     # Seed default prompt files so the user can easily customize and add words
     for name in ("burmese_terms.txt", "spoken_burmese.md"):
@@ -152,17 +154,24 @@ def read():
         with open(BUS, encoding="utf-8") as f:
             return json.load(f)
     except (OSError, ValueError):
-        return {"state": "idle", "text": "", "level": 0.0, "ts": time.time()}
+        return {"state": "idle", "text": "", "level": 0.0,
+                "mouth": "closed", "expression": "neutral", "ts": time.time()}
 
 
-def write(state, text="", level=0.0):
+MOUTHS = ("closed", "consonant", "ah", "ee", "oh")
+EXPRESSIONS = ("neutral", "bright", "amused", "curious", "surprised", "tired")
+
+
+def write(state, text="", level=0.0, mouth="closed", expression="neutral"):
     """Atomic write — the face polls this file constantly and must never
     catch it half-written."""
     if state not in VALID:
         raise ValueError(f"unknown state {state!r}")
+    mouth = mouth if mouth in MOUTHS else "closed"
+    expression = expression if expression in EXPRESSIONS else "neutral"
     os.makedirs(os.path.dirname(BUS), exist_ok=True)
     payload = {"state": state, "text": text, "level": round(float(level), 4),
-               "ts": time.time()}
+               "mouth": mouth, "expression": expression, "ts": time.time()}
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(BUS), suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:

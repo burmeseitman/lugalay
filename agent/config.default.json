@@ -17,15 +17,18 @@
     "_device_note": "null = system default. Or an index/name substring from mictest.py.",
     "debug_keys": true,
     "_key_note": "pynput syntax; a list means any of them works. e.g. <cmd_r>, <alt_r>, <f13>",
-    "open_sensitivity": 4.0,
-    "open_silence_seconds": 0.65,
-    "open_min_seconds": 0.4,
+    "open_sensitivity": 3.5,
+    "open_silence_seconds": 0.6,
+    "open_min_seconds": 0.3,
+    "fast_response": true,
     "_mode_note": "open = hands-free (just talk). ptt = hold a key.",
     "_silence_note": "how long you must stop talking before it replies. Lower = snappier, but cuts you off mid-pause."
   },
   "stt": {
     "engine": "faster-whisper",
+    "google": true,
     "mode": "bilingual",
+    "beam_size": 5,
     "lid_model": "base",
     "models": {
       "my": "whisper-my-turbo",
@@ -37,10 +40,22 @@
     "_models_note": "whisper-my-turbo (809M, ~3.5s) is the default. whisper-my-large (1.5B, ~14-21s) is also converted and gives longer, more coherent Burmese but is 4-6x slower — swap models.my to 'whisper-my-large' to try it."
   },
   "tts": {
-    "engine": "auto",
+    "engine": "gemini",
+    "prefer_gemini": true,
+    "gemini": {
+      "model": "gemini-3.1-flash-lite",
+      "max_tokens": 180,
+      "timeout_seconds": 30,
+      "_note": "Uses the securely saved TTS key. Flash-Lite streams the first sentence with minimal thinking; local Ollama remains the offline fallback."
+    },
     "provider": "auto",
+    "gemini_api_key": "",
     "api_key": "",
-    "_api_key_note": "Paste your ElevenLabs API Key here for custom English voices. Leave empty to use free Microsoft Edge-TTS.",
+    "_api_key_note": "Add or remove the Gemini key from the in-app Settings panel. GEMINI_API_KEY and GOOGLE_API_KEY are also supported. api_key is retained only for older configs.",
+    "gemini_model": "gemini-2.5-flash-preview-tts",
+    "gemini_voice": "",
+    "gemini_timeout_seconds": 45,
+    "_gemini_note": "auto uses Gemini for Burmese when a key is available, then falls back to Edge. Set provider to edge to force Edge. An empty gemini_voice selects Achird for male faces or Aoede for female faces.",
     "voice": "bm_lewis",
     "burmese_voice": "my-MM-ThihaNeural",
     "speed": 1.0,
@@ -69,7 +84,7 @@
       "_keep_alive_note": "How long Ollama holds the model in memory after a reply. Default 5m means a normal pause in conversation costs a 4-9s reload on the next question. '-1' never unloads, at the price of ~5GB of RAM sitting there.",
       "_model_note": "A preference, not a requirement. If this model is not installed, the smallest one that is gets used instead and the log says so — deleting a model used to leave the fallback calling something Ollama no longer had, which failed silently. Cloud-hosted entries (name ending :cloud) are skipped, since a fallback for being offline cannot itself need the internet."
     },
-    "_engine_note": "auto = Claude first, then a hosted or local model if Claude fails. claude = Claude only. openai / groq / together / openrouter / deepseek = a hosted OpenAI-compatible model, configured under brain.remote. ollama / lmstudio = the local model server on this machine — no tools unless the model itself supports tool calling, in which case memory read/write, page opening and the board are available.",
+    "_engine_note": "gemini = fastest conversational path using the securely saved Gemini key, with local fallback. auto = Gemini when its key exists, otherwise Claude and local fallback. openai / groq / together / openrouter / deepseek use brain.remote. ollama / lmstudio use a local model server.",
     "remote": {
       "api_key": "",
       "url": "",
@@ -111,6 +126,7 @@
       "beard": false,
       "wrinkles": false,
       "voice": {
+        "gemini": "Achird",
         "my": "my-MM-ThihaNeural",
         "my_rate": "+2%",
         "my_pitch": "+0Hz",
@@ -130,6 +146,7 @@
       "beard": false,
       "wrinkles": false,
       "voice": {
+        "gemini": "Leda",
         "my": "my-MM-NilarNeural",
         "my_rate": "+0%",
         "my_pitch": "+1Hz",
@@ -149,6 +166,7 @@
       "beard": true,
       "wrinkles": false,
       "voice": {
+        "gemini": "Charon",
         "my": "my-MM-ThihaNeural",
         "my_rate": "-2%",
         "my_pitch": "-3Hz",
@@ -168,6 +186,7 @@
       "beard": false,
       "wrinkles": false,
       "voice": {
+        "gemini": "Gacrux",
         "my": "my-MM-NilarNeural",
         "my_rate": "-3%",
         "my_pitch": "-2Hz",
@@ -187,6 +206,7 @@
       "beard": false,
       "wrinkles": true,
       "voice": {
+        "gemini": "Algenib",
         "my": "my-MM-ThihaNeural",
         "my_rate": "-6%",
         "my_pitch": "-7Hz",
@@ -194,7 +214,7 @@
       }
     }
   ],
-  "_faces_note": "press 1-5 to switch. The voice follows the face: Burmese has only two neural voices, so age is expressed through rate and pitch.",
+  "_faces_note": "press 1-5 to switch. Gemini uses a distinct voice per face; the Edge fallback uses Thiha/Nilar with age expressed through rate and pitch.",
   "greeting_en": "Hello {user}, what are we working on today?",
   "setup_done": false,
   "_setup_note": "setup_done false makes the app open its first-run screen instead of the face. The name lives here and only here; CLAUDE.md and memory/profile.md are rendered from agent/templates/ during setup.",

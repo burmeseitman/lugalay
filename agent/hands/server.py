@@ -18,7 +18,7 @@ import open_url  # noqa: E402
 
 CFG = bus.config()
 PORT = int(CFG.get("hands_port", 7318))
-BOARD = os.path.join(HERE, "state", "board.json")
+BOARD = os.path.join(bus.ROOT, "hands", "state", "board.json")
 LOCK = threading.Lock()
 
 
@@ -121,7 +121,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if path != "/board":
             return self._send(404, json.dumps({"error": "not found"}))
-        n = int(self.headers.get("Content-Length", 0))
+        n = min(int(self.headers.get("Content-Length", 0) or 0), 1024 * 1024)
         try:
             d = json.loads(self.rfile.read(n))
             assert isinstance(d.get("cards"), list)

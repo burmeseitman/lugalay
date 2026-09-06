@@ -98,18 +98,21 @@ atexit.register(shutdown)
 # never fires and the app ignores SIGTERM, orphaning the voice loop and the
 # face server. Block the signals everywhere and wait for them on a thread of
 # our own, which works no matter what the main thread is doing.
-_SIGS = {signal.SIGTERM, signal.SIGINT, signal.SIGHUP}
-signal.pthread_sigmask(signal.SIG_BLOCK, _SIGS)
+_SIGS = {getattr(signal, "SIGTERM", None), getattr(signal, "SIGINT", None),
+         getattr(signal, "SIGHUP", None)} - {None}
+if hasattr(signal, "pthread_sigmask") and hasattr(signal, "sigwait"):
+    try:
+        signal.pthread_sigmask(signal.SIG_BLOCK, _SIGS)
 
+        def _reaper():
+            sig = signal.sigwait(_SIGS)
+            print(f"[app] got signal {sig}, shutting down")
+            shutdown()
+            os._exit(0)
 
-def _reaper():
-    sig = signal.sigwait(_SIGS)
-    print(f"[app] got signal {sig}, shutting down")
-    shutdown()
-    os._exit(0)
-
-
-threading.Thread(target=_reaper, daemon=True).start()
+        threading.Thread(target=_reaper, daemon=True).start()
+    except Exception as e:
+        print(f"[app] signal reaper setup failed: {e}")
 
 
 def port_open(port, host="127.0.0.1"):

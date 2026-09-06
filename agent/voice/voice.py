@@ -32,14 +32,6 @@ try:
 except Exception:                      # a build without them still talks
     local_tools = None
 
-try:
-    import emotion  # noqa: E402
-except Exception:
-    try:
-        from voice import emotion  # noqa: E402
-    except Exception:
-        emotion = None
-
 # bus decides where things live: alongside the code in a checkout, in the
 # user's own directory when this is running from a packaged app.
 HOME = bus.HOME
@@ -297,6 +289,155 @@ class Brain:
             yield answer[m.end():].strip(), False
         else:
             yield answer, True
+
+    @staticmethod
+    def _gemini_api_key():
+        """Reuse the TTS key without copying it into another config section."""
+        live = bus.config().get("tts", {})
+        return str(
+            live.get("gemini_api_key")
+            or live.get("api_key")
+            or os.environ.get("GEMINI_API_KEY")
+            or os.environ.get("GOOGLE_API_KEY")
+            or ""
+        ).strip()
+
+    def _prefer_gemini(self, engine):
+        """Use the low-latency brain for legacy auto/Codex configurations.
+
+        Existing installations keep their personal config across upgrades. The
+        preference therefore defaults on when absent, allowing a saved Gemini
+        TTS key to remove the slow Codex -> large local-model fallback chain.
+        Explicit local and third-party remote engines remain respected.
+        """
+        return bool(self._gemini_api_key()) and (
+            engine == "gemini"
+            or (self.cfg.get("prefer_gemini", True)
+                and engine in ("auto", "claude", "codex"))
+        )
+
+    def _gemini_stream(self, text, lang=None):
+        """Yield complete sentences from Gemini's SSE text stream."""
+        import urllib.parse
+        import urllib.request
+
+        key = self._gemini_api_key()
+        if not key:
+            log("brain", f"{C['am']}Gemini key unavailable; using local model{C['x']}", "am")
+            yield from self._local_stream(text, lang)
+            return
+
+        g = self.cfg.get("gemini", {})
+        model = g.get("model", "gemini-3.1-flash-lite")
+        timeout = float(g.get("timeout_seconds", 30))
+        max_tokens = int(g.get("max_tokens", 180))
+
+        conversation = []
+        for item in self.history[-6:]:
+            role = "model" if item.get("role") == "assistant" else "user"
+            content = str(item.get("content") or "").strip()
+            if content:
+                conversation.append({"role": role, "parts": [{"text": content}]})
+        conversation.append({"role": "user", "parts": [{"text": text}]})
+        payload = {
+            "systemInstruction": {
+                "parts": [{"text": self._local_system(lang or self.lang)}]
+            },
+            "contents": conversation,
+            "generationConfig": {
+                "maxOutputTokens": max_tokens,
+                "thinkingConfig": {"thinkingLevel": "minimal"},
+            },
+        }
+
+        started = time.monotonic()
+        buf, full, sent_first = "", "", False
+        failure = None
+        # The rolling alias protects installed apps when Google retires an
+        # older exact model name. Keep the exact stable model first so behavior
+        # remains predictable while it is available.
+        models = list(dict.fromkeys((model, "gemini-flash-lite-latest")))
+        for candidate_model in models:
+            endpoint = (
+                "https://generativelanguage.googleapis.com/v1beta/models/"
+                + urllib.parse.quote(candidate_model, safe="")
+                + ":streamGenerateContent?alt=sse"
+            )
+            request = urllib.request.Request(
+                endpoint,
+                data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                headers={"Content-Type": "application/json", "x-goog-api-key": key},
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=timeout) as response:
+                    for raw in response:
+                        line = raw.decode("utf-8", errors="replace").strip()
+                        if not line.startswith("data:"):
+                            continue
+                        try:
+                            event = json.loads(line[5:].strip())
+                        except ValueError:
+                            continue
+                        parts = (((event.get("candidates") or [{}])[0]
+                                  .get("content") or {}).get("parts") or [])
+                        piece = "".join(
+                            str(part.get("text") or "") for part in parts
+                            if isinstance(part, dict)
+                        )
+                        if not piece:
+                            continue
+                        buf += piece
+                        full += piece
+                        while True:
+                            match = SENT_END.search(buf)
+                            if not match or match.end() < 12:
+                                break
+                            head, buf = buf[:match.end()].strip(), buf[match.end():]
+                            if head:
+                                if not sent_first:
+                                    log("brain", f"{C['dim']}Gemini first sentence "
+                                        f"{time.monotonic()-started:.2f}s{C['x']}", "dim")
+                                yield head, not sent_first
+                                sent_first = True
+                failure = None
+                break
+            except Exception as exc:
+                failure = exc
+                # Only retry a retired/missing model before any speech starts.
+                if getattr(exc, "code", None) in (404, 429, 500, 502, 503, 504) \
+                        and not full \
+                        and candidate_model != models[-1]:
+                    log("brain", f"{C['dim']}{candidate_model} unavailable; "
+                                 f"trying current Flash-Lite alias{C['x']}", "dim")
+                    continue
+                break
+
+        if failure is not None:
+            exc = failure
+            log("brain", f"{C['am']}Gemini brain unavailable ({exc}); "
+                         f"using local model{C['x']}", "am")
+            # Once speech has begun, switching brains would repeat the answer
+            # in different words. Keep a partial tail and recover next turn.
+            if sent_first:
+                rest = buf.strip()
+                if rest:
+                    yield rest, False
+            else:
+                yield from self._local_stream(text, lang)
+            return
+
+        rest = buf.strip()
+        if rest:
+            yield rest, not sent_first
+        elif not sent_first:
+            yield "I do not have anything to say to that.", True
+        answer = full.strip()
+        if answer:
+            self.history.extend([
+                {"role": "user", "content": text},
+                {"role": "assistant", "content": answer},
+            ])
 
     def _remote_tool_round(self, url, model, key, text, lang):
         """Same idea as _tool_round but for an OpenAI-compatible endpoint."""
@@ -565,8 +706,8 @@ class Brain:
         if be["api"] == "ollama":
             # patch config so _ollama_stream picks the right url/model
             o = self.cfg.setdefault("ollama", {})
-            o.setdefault("url", be["url"])
-            o.setdefault("model", model)
+            o["url"] = be["url"]
+            o["model"] = model
             yield from self._ollama_stream(text, lang)
         else:
             yield from self._openai_stream(text, lang, url=be["url"], model=model)
@@ -627,7 +768,68 @@ class Brain:
         be, _ = self._discover_local()
         return be is not None
 
+    def codex_available(self):
+        """Is OpenAI Codex CLI installed and on PATH?"""
+        import shutil
+        for p in self.BRAIN_PATHS:
+            expanded = os.path.expanduser(p)
+            if os.path.isfile(os.path.join(expanded, "codex")):
+                return True
+        return shutil.which("codex") is not None
 
+    def _codex_stream(self, text, lang=None):
+        """Run OpenAI's Codex CLI non-interactively using the user's Codex/ChatGPT Plus session."""
+        sys_prompt = self.style(lang or self.lang) + "\n\n" + self.now_note()
+        codex_bin = None
+        for p in self.BRAIN_PATHS:
+            candidate = os.path.expanduser(os.path.join(p, "codex"))
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                codex_bin = candidate
+                break
+        if not codex_bin:
+            import shutil
+            codex_bin = shutil.which("codex") or "codex"
+
+        user_prompt = f"[System Instructions: {sys_prompt}]\n\n[User Message]: {text}"
+        cmd = [codex_bin, "exec", "--json", user_prompt]
+        try:
+            proc = subprocess.Popen(cmd, cwd=HOME, env=self._env(),
+                                    stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.PIPE,
+                                    stderr=subprocess.DEVNULL, text=True,
+                                    encoding="utf-8", errors="replace")
+        except FileNotFoundError:
+            if self.local_available():
+                log("brain", f"{C['am']}codex not found; falling back to local model{C['x']}", "am")
+                yield from self._local_stream(text, lang)
+                return
+            yield "I cannot find the codex command. Please install it with brew install codex.", True
+            return
+
+        full_answer = ""
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            if d.get("type") == "item.completed":
+                item = d.get("item") or {}
+                if item.get("type") == "agent_message":
+                    full_answer = item.get("text", "").strip()
+        proc.wait()
+
+        if full_answer:
+            for piece in self._split_first_sentence(full_answer):
+                yield piece
+        else:
+            if self.local_available():
+                log("brain", f"{C['am']}codex returned empty response; falling back to local model{C['x']}", "am")
+                yield from self._local_stream(text, lang)
+                return
+            yield "I do not have anything to say to that.", True
 
     def stream(self, text, lang=None):
         """Yield the reply in pieces as it is generated.
@@ -647,6 +849,12 @@ class Brain:
             return
 
         engine = self.cfg.get("engine", "claude")
+        if self._prefer_gemini(engine) or engine == "gemini":
+            yield from self._gemini_stream(text, lang)
+            return
+        if engine == "codex":
+            yield from self._codex_stream(text, lang)
+            return
         if engine in ("openai", "remote", "groq", "together", "openrouter",
                       "deepseek"):
             yield from self._remote_stream(text, lang)
@@ -665,6 +873,10 @@ class Brain:
                                     stderr=subprocess.DEVNULL, text=True,
                                     encoding="utf-8", errors="replace")
         except FileNotFoundError:
+            if self.codex_available():
+                log("brain", f"{C['am']}claude not installed; switching to Codex Plus brain{C['x']}", "am")
+                yield from self._codex_stream(text, lang)
+                return
             if (self.cfg.get("engine") in ("auto", "claude", "local")
                     and self.local_available()):
                 log("brain", f"{C['am']}claude not installed; "
@@ -704,6 +916,10 @@ class Brain:
         proc.wait()
 
         if err:
+            if self.codex_available():
+                log("brain", f"{C['am']}claude failed ({err}); switching to Codex Plus brain{C['x']}", "am")
+                yield from self._codex_stream(text, lang)
+                return
             if (self.cfg.get("engine") in ("auto", "claude", "local") and not sent_first
                     and self.local_available()):
                 log("brain", f"{C['am']}claude failed ({err}); "
@@ -724,6 +940,14 @@ class Brain:
             return f"You said: {text}"
 
         engine = self.cfg.get("engine", "claude")
+        if self._prefer_gemini(engine) or engine == "gemini":
+            parts = list(self._gemini_stream(text, lang))
+            return " ".join(p for p, _ in parts).strip() or \
+                   "I do not have anything to say to that."
+        if engine == "codex":
+            parts = list(self._codex_stream(text, lang))
+            return " ".join(p for p, _ in parts).strip() or \
+                   "I do not have anything to say to that."
         if engine in ("openai", "remote", "groq", "together", "openrouter",
                       "deepseek"):
             parts = list(self._remote_stream(text, lang))
@@ -872,13 +1096,17 @@ class OpenMic:
         self.rate = int(m.get("samplerate", 16000))
         self.max_s = int(m.get("max_seconds", 30))
         self.device = Ears._resolve(m.get("device"))
-        self.start_ratio = float(m.get("open_sensitivity", 4.0))
-        self.hang_s = float(m.get("open_silence_seconds", 0.9))
-        self.min_s = float(m.get("open_min_seconds", 0.4))
+        self.start_ratio = float(m.get("open_sensitivity", 3.5))
+        self.hang_s = float(m.get("open_silence_seconds", 0.6))
+        if m.get("fast_response", True):
+            # Existing configs used 1.0s. Cap them automatically so an upgrade
+            # feels faster without requiring people to recreate their settings.
+            self.hang_s = min(self.hang_s, 0.6)
+        self.min_s = float(m.get("open_min_seconds", 0.3))
         self.events = events
 
         self.block = 512                       # 32 ms at 16 kHz
-        self.pre_roll = int(0.4 * self.rate / self.block)
+        self.pre_roll = int(0.6 * self.rate / self.block)
         self.noise = 0.004                     # updated continuously
         self.calibrating = int(1.0 * self.rate / self.block)
         self.cal = []
@@ -989,6 +1217,37 @@ class OpenMic:
         self.muted = False
 
 
+def clean_burmese_stt(text):
+    """Clean and normalize raw STT output for Burmese speech.
+    Removes Whisper hallucination loops, cleans spacing and spurious punctuation."""
+    if not text:
+        return ""
+    text = text.strip()
+
+    # 1. Deduplicate word-level immediate repetition (e.g. "ဟုတ်ကဲ့ ဟုတ်ကဲ့ ဟုတ်ကဲ့" -> "ဟုတ်ကဲ့")
+    words = text.split()
+    if words:
+        deduped = [words[0]]
+        for w in words[1:]:
+            if w != deduped[-1]:
+                deduped.append(w)
+        text = " ".join(deduped)
+
+    # 2. Collapse repetitive phrase patterns: (XYZ)+(XYZ)+ -> XYZ
+    text = re.sub(r"(.{4,20}?)\s*(?:\1\s*){2,}", r"\1 ", text)
+
+    # 3. Fix common Whisper hallucination prefixes/suffixes
+    text = re.sub(r"^[\s,.\-—–?¿!¡:;*#]+", "", text)
+    text = re.sub(r"[\s\-—–:;*#?¿!¡]+$", "", text)
+
+    # 4. Clean extra spaces
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+BURMESE_STT_PROMPT = "မင်္ဂလာပါ။ ဟုတ်ကဲ့ခင်ဗျာ၊ ကျွန်တော် ဘာလုပ်ပေးရမလဲ။ နေကောင်းလား။ ဘာအကူအညီ လိုအပ်ပါသလဲခင်ဗျာ။"
+
+
 class Transcriber:
     """Speech to text, in Burmese or English, decided per utterance.
 
@@ -1066,24 +1325,30 @@ class Transcriber:
             if audio.dtype != np.float32:
                 audio_float = audio.astype(np.float32) / 32767.0
             else:
-                audio_float = audio
+                audio_float = audio.copy()
+
+            # Dynamic gain boost for soft/distant speech
+            peak = float(np.max(np.abs(audio_float))) if len(audio_float) else 0.0
+            if peak > 1e-4:
+                gain = min(4.0, 0.85 / peak)
+                audio_float = np.clip(audio_float * gain, -1.0, 1.0)
 
             flac_buf = io.BytesIO()
             sf.write(flac_buf, audio_float, 16000, format="FLAC", subtype="PCM_16")
             flac_data = flac_buf.getvalue()
 
-            key = "AIzaSyBOti4mM-6x9WDnZIjIeyEU21OpBXqWBgw"
+            key = self.cfg.get("google_api_key") or os.environ.get("GOOGLE_SPEECH_API_KEY", "AIzaSyBOti4mM-6x9WDnZIjIeyEU21OpBXqWBgw")
             params = urllib.parse.urlencode({
                 "client": "chromium",
                 "lang": lang,
                 "key": key,
                 "pFilter": 0
             })
-            url = f"http://www.google.com/speech-api/v2/recognize?{params}"
+            url = f"https://www.google.com/speech-api/v2/recognize?{params}"
             headers = {"Content-Type": "audio/x-flac; rate=16000", "User-Agent": "Mozilla/5.0"}
 
             req = urllib.request.Request(url, data=flac_data, headers=headers)
-            with urllib.request.urlopen(req, timeout=8) as resp:
+            with urllib.request.urlopen(req, timeout=5.0) as resp:
                 for line in resp.read().decode("utf-8").splitlines():
                     if not line.strip():
                         continue
@@ -1094,7 +1359,7 @@ class Transcriber:
                         if alts:
                             transcript = alts[0].get("transcript", "").strip()
                             if transcript:
-                                return transcript
+                                return clean_burmese_stt(transcript)
             return None
         except Exception as e:
             log("stt", f"{C['am']}Google STT request failed ({e}){C['x']}", "am")
@@ -1103,10 +1368,11 @@ class Transcriber:
     def __call__(self, audio):
         """Returns (text, language) — obeys user's configured listening language."""
         if audio.size < 4000:          # under a quarter second: a slip, not speech
-            return "", None
+            return "", self.lang
 
         cfg = bus.config()
-        listen_mode = cfg.get("language", {}).get("listen", "my")
+        listen_mode = cfg.get("listen_language") or cfg.get("language", {}).get("listen", "my")
+        beam_size = int(self.cfg.get("beam_size", 5))
 
         # 1. Explicit Burmese Listening Mode
         if listen_mode == "my":
@@ -1118,8 +1384,13 @@ class Transcriber:
             # Offline Burmese fallback
             if hasattr(self, "name_my") and os.path.isdir(os.path.join(MODELS, self.name_my)):
                 model = self._load(self.name_my)
-                segs, _ = model.transcribe(audio, language="my", beam_size=1, vad_filter=True)
-                return " ".join(x.text for x in segs).strip(), "my"
+                segs, _ = model.transcribe(
+                    audio, language="my", beam_size=beam_size, best_of=beam_size,
+                    vad_filter=False, initial_prompt=BURMESE_STT_PROMPT,
+                    condition_on_previous_text=False, temperature=0.0,
+                    repetition_penalty=1.15)
+                raw = " ".join(x.text for x in segs).strip()
+                return clean_burmese_stt(raw), "my"
             return "", "my"
 
         # 2. Explicit English Listening Mode
@@ -1131,15 +1402,19 @@ class Transcriber:
                     return g_text, "en"
             model_name = getattr(self, "name_en", "small.en")
             model = self._load(model_name)
-            segs, _ = model.transcribe(audio, language="en", beam_size=1, vad_filter=True)
+            segs, _ = model.transcribe(
+                audio, language="en", beam_size=beam_size, vad_filter=False,
+                condition_on_previous_text=False, temperature=0.0)
             return " ".join(x.text for x in segs).strip(), "en"
 
         # 3. Auto / Bilingual Mode
         if not self.bilingual:
+            prompt = BURMESE_STT_PROMPT if self.lang == "my" else None
             segs, _ = self.single.transcribe(
-                audio, language=self.lang, beam_size=1, vad_filter=True,
-                condition_on_previous_text=False)
-            return " ".join(x.text for x in segs).strip(), self.lang
+                audio, language=self.lang, beam_size=beam_size, vad_filter=False,
+                initial_prompt=prompt, condition_on_previous_text=False, temperature=0.0)
+            raw = " ".join(x.text for x in segs).strip()
+            return clean_burmese_stt(raw) if self.lang == "my" else raw, self.lang
 
         # Try Google STT for Burmese first (95%+ accuracy)
         if self.cfg.get("google", True):
@@ -1164,10 +1439,15 @@ class Transcriber:
 
         model = self._load(model_name)
         log("stt", f"{C['dim']}local whisper {model_name} (forced={forced}){C['x']}")
-        segs, _ = model.transcribe(audio, language=forced, beam_size=1,
-                                   vad_filter=True,
-                                   condition_on_previous_text=False)
-        return " ".join(x.text for x in segs).strip(), forced
+        prompt = BURMESE_STT_PROMPT if forced == "my" else None
+        segs, _ = model.transcribe(
+            audio, language=forced, beam_size=beam_size,
+            best_of=beam_size if forced == "my" else 1,
+            vad_filter=False, initial_prompt=prompt,
+            condition_on_previous_text=False, temperature=0.0,
+            repetition_penalty=1.15 if forced == "my" else 1.0)
+        raw = " ".join(x.text for x in segs).strip()
+        return clean_burmese_stt(raw) if forced == "my" else raw, forced
 
 
 # ──────────────────────────────── the mouth ──────────────────────────────
@@ -1178,7 +1458,10 @@ SYNTH_TIMEOUT = 20
 # How many times to ask for one piece of speech before giving up on it.
 SYNTH_TRIES = 3
 
-SENT = re.compile(r"(?<=[.!?…။၊])\s+|(?<=[။၊])")
+# A comma is a breath inside an utterance, not an utterance boundary.  Splitting
+# on Myanmar ၊ made Edge-TTS start a fresh voice clip at every phrase, so the
+# intonation repeatedly reset and conversational Burmese sounded read-out-loud.
+SENT = re.compile(r"(?<=[.!?…။])\s+|(?<=။)")
 MYANMAR = re.compile(r"[\u1000-\u109F\uAA60-\uAA7F]")
 SENT_END = re.compile(r"[.!?…။]")
 
@@ -1200,10 +1483,8 @@ def burmese_terms():
     half. This table is the guarantee behind that request.
     """
     paths = [
-        os.path.join(bus.HOME, "agent", "voice", "prompts", "burmese_terms.txt"),
-        os.path.join(os.path.expanduser("~"), "lugalay", "agent", "voice", "prompts", "burmese_terms.txt"),
-        os.path.join(os.path.expanduser("~"), "Lugalay", "agent", "voice", "prompts", "burmese_terms.txt"),
         os.path.join(bus.ROOT, "voice", "prompts", "burmese_terms.txt"),
+        os.path.join(bus.HOME, "agent", "voice", "prompts", "burmese_terms.txt"),
         bus.resource("voice", "prompts", "burmese_terms.txt"),
     ]
     for path in paths:
@@ -1281,10 +1562,32 @@ COMMON_ENGLISH_PHONETICS = [
     ("meta", "မေတာ"),
     ("openai", "အိုပန် အေအိုင်"),
     ("ai", "အေအိုင်"),
+    ("python", "ပိုင်သွန်"),
+    ("javascript", "ဂျာဗားစခရစ်"),
+    ("github", "ဂစ်ဟပ်"),
+    ("git", "ဂစ်"),
+    ("terminal", "တာမီနယ်"),
+    ("code", "ကုတ်"),
+    ("coding", "ကုတ်ဒင်း"),
+    ("bug", "ဘတ်ခ်"),
+    ("debug", "ဒီဘတ်ခ်"),
+    ("fix", "ဖစ်ခ်စ်"),
+    ("test", "တက်စ်"),
+    ("setup", "ဆက်တပ်"),
+    ("restart", "ရီစတတ်"),
+    ("app", "အက်ပ်"),
+    ("file", "ဖိုင်"),
+    ("folder", "ဖိုလ်ဒါ"),
+    ("wifi", "ဝိုင်ဖိုင်"),
+    ("battery", "ဘက်ထရီ"),
+    ("screen", "စကရင်"),
     ("ok", "အိုကေ"),
+    ("okay", "အိုကေ"),
     ("hi", "ဟိုင်း"),
     ("hello", "ဟယ်လို"),
     ("bye", "တာ့တာ"),
+    ("yes", "ရက်စ်"),
+    ("no", "နိုး"),
 ]
 
 LETTER_MAP = {
@@ -1321,21 +1624,49 @@ def transliterate_terms(text):
 SPOKEN_CONVERSIONS = [
     # Multi-word & verb phrases
     (r"ဖြစ်ပါသည်", "ဖြစ်ပါတယ်"),
+    (r"ရှိပါသည်", "ရှိပါတယ်"),
+    (r"ရှိသည်", "ရှိတယ်"),
     (r"ပါသည်", "ပါတယ်"),
     (r"မည်ဖြစ်သည်", "မှာဖြစ်တယ်"),
+    (r"မည်ဖြစ်ပါသည်", "မှာဖြစ်ပါတယ်"),
     (r"မည်ဖြစ်", "မှာဖြစ်"),
     (r"ဖြစ်သည်", "ဖြစ်တယ်"),
+    (r"ဆောင်ရွက်ပေးပါမည်", "လုပ်ပေးပါမယ်"),
     (r"ဆောင်ရွက်ပါမည်", "လုပ်ပေးပါမယ်"),
     (r"ဆောင်ရွက်မည်", "လုပ်ပေးမယ်"),
+    (r"ဆောင်ရွက်ပါ", "လုပ်ပါ"),
+    (r"အသုံးပြုနိုင်ပါသည်", "သုံးလို့ရပါတယ်"),
+    (r"အသုံးပြုပါသည်", "သုံးပါတယ်"),
+    (r"အသုံးပြုသည်", "သုံးတယ်"),
+    (r"ဖော်ပြထားပါသည်", "ပြထားပါတယ်"),
+    (r"ဖော်ပြပါသည်", "ပြောပြထားပါတယ်"),
+    (r"တွေ့ရှိရပါသည်", "တွေ့ရပါတယ်"),
+    (r"တွေ့ရှိရသည်", "တွေ့ရတယ်"),
+    (r"သိရှိပါသည်", "သိပါတယ်"),
+    (r"သိရှိရပါသည်", "သိရပါတယ်"),
+    (r"လေ့လာတွေ့ရှိရသည်", "တွေ့ရတယ်"),
+
+    # Connectors & question transitions
     (r"အဘယ်ကြောင့်ဆိုသော်", "ဘာဖြစ်လို့လဲဆိုတော့"),
     (r"သို့သော်လည်း|သို့သော်", "ဒါပေမဲ့"),
-    (r"ပတ်သက်၍", "ပတ်သက်ပြီး"),
+    (r"ပတ်သက်၍|စပ်လျဉ်း၍", "ပတ်သက်ပြီး"),
     (r"ပြီးလျှင်", "ပြီးတော့"),
     (r"သော်လည်း", "ပေမဲ့"),
     (r"ယနေ့", "ဒီနေ့"),
     (r"၎င်း", "ဒါ"),
+    (r"ဤသို့", "ဒီလို"),
+    (r"ထိုသို့", "အဲဒီလို"),
+    (r"ထို့ကြောင့်|သို့ဖြစ်ပါ၍", "ဒါကြောင့်"),
+    (r"ထို့နောက်", "ပြီးတော့"),
+    (r"ထို့အပြင်", "ဒါ့အပြင်"),
     (r"ဤ", "ဒီ"),
     (r"ထို", "ဟို"),
+    (r"မည်သို့", "ဘယ်လို"),
+    (r"မည်သည့်အခါ", "ဘယ်အချိန်"),
+    (r"မည်သည့်နေရာ", "ဘယ်နေရာ"),
+    (r"မည်သည့်", "ဘယ်"),
+    (r"မည်သူ", "ဘယ်သူ"),
+    (r"အဘယ်ကြောင့်", "ဘာကြောင့်"),
 
     # Plural + particle combinations
     (r"များသည်", "တွေဟာ"),
@@ -1343,6 +1674,16 @@ SPOKEN_CONVERSIONS = [
     (r"များတွင်|များ၌", "တွေမှာ"),
     (r"များ၏", "တွေရဲ့"),
     (r"များ", "တွေ"),
+    (r"စသည်ဖြင့်|စသည်တို့|စသည်", "စတာတွေ"),
+
+    # Negation conversions (formal မ...ပါ -> spoken မ...ပါဘူး)
+    (r"မရှိပါ(?=[။၊\s]|$)", "မရှိပါဘူး"),
+    (r"မရပါ(?=[။၊\s]|$)", "မရပါဘူး"),
+    (r"မဖြစ်နိုင်ပါ(?=[။၊\s]|$)", "မဖြစ်နိုင်ပါဘူး"),
+    (r"မဖြစ်ပါ(?=[။၊\s]|$)", "မဖြစ်ပါဘူး"),
+    (r"မဟုတ်ပါ(?=[။၊\s]|$)", "မဟုတ်ပါဘူး"),
+    (r"မသိပါ(?=[။၊\s]|$)", "မသိပါဘူး"),
+    (r"မကောင်းပါ(?=[။၊\s]|$)", "မကောင်းပါဘူး"),
 
     # Particles & case markers
     (r"၌", "မှာ"),
@@ -1398,6 +1739,13 @@ def normalize_burmese_spoken(text):
     return text
 
 
+_PERF_TAG_PATTERN = re.compile(
+    r"\[(laugh|giggle|chuckle|sigh|gasp|hmm|yawn|throat_clear|cough|wow|laughs|giggles|chuckles|sighs|yawns|ရယ်သံ|သက်ပြင်း|ဟားဟား|ဟဲဟဲ|ဟိဟိ|အံ့ဩ|အင်း|ချောင်းဟန့်|သမ်းဝေ|ဝိုး)s?\]|"
+    r"\*(laugh|giggle|chuckle|sigh|gasp|hmm|yawn|throat_clear|cough|wow|laughs|giggles|chuckles|sighs|yawns|ရယ်သံ|သက်ပြင်း|ဟားဟား|ဟဲဟဲ|ဟိဟိ|အံ့ဩ|အင်း|ချောင်းဟန့်|သမ်းဝေ|ဝိုး)s?\*",
+    re.IGNORECASE
+)
+
+
 def format_burmese_for_speech(text):
     """Format Burmese text specifically for natural neural TTS prosody.
     Converts literary particles to spoken Burmese, adds breathing spaces around
@@ -1425,12 +1773,23 @@ def format_burmese_for_speech(text):
     return text
 
 
-def clean_spoken_text(text):
+def clean_spoken_text(text, keep_sfx_tags=False):
     """Clean LLM output so it sounds like natural, human speech when spoken aloud.
     Removes markdown formatting, emojis, asterisks, bullet points, raw code, XML/think tags,
     and normalizes punctuation for natural breathing pauses."""
     if not text:
         return ""
+
+    placeholders = {}
+    if keep_sfx_tags:
+        def _mask_tag(m):
+            key = f"XYZSFXTAG{len(placeholders)}XYZ"
+            tag_text = m.group(1) or m.group(2)
+            placeholders[key] = f"[{tag_text.lower()}]"
+            return f" {key} "
+
+        text = _PERF_TAG_PATTERN.sub(_mask_tag, text)
+
     # Strip XML/HTML tags and reasoning artifacts (e.g. <think>...</think>)
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
     text = re.sub(r"<[^>]+>", "", text)
@@ -1451,9 +1810,7 @@ def clean_spoken_text(text):
     # Strip emojis and unicode symbols
     text = re.sub(r"[\U00010000-\U0010ffff]", "", text)
     text = re.sub(r"[\u2600-\u27ff]", "", text)
-    # Unwrap parenthetical asides. The engine treats a bracket as a hard stop
-    # and the sentence comes out limping, so keep the words and drop the
-    # brackets rather than dropping the aside with them.
+    # Unwrap parenthetical asides
     text = re.sub(r"[\(\)\[\]（）【】]", " ", text)
     # Normalize punctuation and pauses
     text = re.sub(r"\.{2,}", "…", text)
@@ -1461,18 +1818,53 @@ def clean_spoken_text(text):
     text = re.sub(r"[?]{2,}", "?", text)
     text = re.sub(r"[|/\\#@^~]", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
+
+    if keep_sfx_tags and placeholders:
+        for k, v in placeholders.items():
+            text = text.replace(k, f" {v} ")
+        text = re.sub(r"\s+", " ", text).strip()
+    elif not keep_sfx_tags:
+        text = _PERF_TAG_PATTERN.sub("", text)
+        text = re.sub(r"\s+", " ", text).strip()
+
     return text
 
 
+def expression_for_text(text):
+    """Choose a restrained face expression for the utterance being played."""
+    if not text:
+        return "neutral"
+    lowered = text.lower()
+    if any(tag in lowered for tag in (
+            "[laugh]", "[laughs]", "[giggle]", "[giggles]",
+            "[chuckle]", "[chuckles]", "[wow]")):
+        return "amused"
+    if any(tag in lowered for tag in ("[gasp]", "[gasps]")):
+        return "surprised"
+    if any(tag in lowered for tag in (
+            "[sigh]", "[sighs]", "[yawn]", "[yawns]")):
+        return "tired"
+    if "?" in text or "လား" in text or "သလဲ" in text:
+        return "curious"
+    if "!" in text:
+        return "bright"
+    return "neutral"
+
+
 class Mouth:
-    """Kokoro, sentence by sentence, so the first words land while the rest
-    is still being synthesised. Falls back to macOS `say` if Kokoro cannot
-    load — a voice that degrades is better than a voice that dies."""
+    """Gemini/Edge for Burmese and Kokoro for English.
+
+    Gemini is preferred when a key is configured. Edge remains the free
+    Burmese fallback, while macOS ``say`` is the last resort for English.
+    """
 
     def __init__(self, cfg):
         self.cfg = cfg["tts"]
         self.kokoro = None
         self.stop_flag = threading.Event()
+        self.last_provider = None
+        self._output_stream = None
+        self._output_rate = None
         try:
             from kokoro_onnx import Kokoro
             m = os.path.join(MODELS, "kokoro-v1.0.onnx")
@@ -1510,14 +1902,148 @@ class Mouth:
         return out or [text]
 
     def _synth_burmese(self, text):
-        """Render Burmese via Emotion & Prosody pipeline with Microsoft Edge-TTS."""
-        return self._synth_burmese_emotional(text)
+        """Render Burmese with Gemini, falling back to clean Edge speech.
+
+        Gemini receives the complete tagged performance so speech and vocal
+        reactions come from the same model and voice. Edge cannot render those
+        reactions naturally, so every tag is removed before the fallback call.
+        """
+        tagged = clean_spoken_text(text, keep_sfx_tags=True)
+        if not tagged:
+            return None
+
+        key = self._gemini_api_key()
+        if key:
+            got = self._synth_burmese_gemini(tagged, key)
+            if got:
+                self.last_provider = "gemini"
+                return got
+            log("tts", f"{C['am']}Gemini TTS unavailable; using clean Edge-TTS speech{C['x']}", "am")
+
+        edge_text = clean_spoken_text(tagged, keep_sfx_tags=False)
+        self.last_provider = "edge"
+        return self._synth_burmese_emotional(edge_text)
+
+    def _gemini_api_key(self):
+        """Return the configured Gemini key unless Edge was explicitly forced."""
+        try:
+            live = bus.config().get("tts", {})
+        except Exception:
+            live = {}
+        provider = self.cfg.get("provider", live.get("provider", "auto"))
+        if str(provider).strip().lower() == "edge":
+            return ""
+        return str(
+            live.get("gemini_api_key")
+            or live.get("api_key")
+            or self.cfg.get("gemini_api_key")
+            or self.cfg.get("api_key")
+            or os.environ.get("GEMINI_API_KEY")
+            or os.environ.get("GOOGLE_API_KEY")
+            or ""
+        ).strip()
+
+    @staticmethod
+    def _decode_gemini_audio(data, mime_type=""):
+        """Convert Gemini's PCM16 (or WAV) response to mono float samples."""
+        import io
+        import numpy as np
+        import soundfile as sf
+
+        if not data:
+            return None
+        if data[:4] == b"RIFF":
+            audio, rate_hz = sf.read(io.BytesIO(data), dtype="float32")
+            if audio.ndim > 1:
+                audio = audio.mean(axis=1)
+            return audio, rate_hz
+
+        match = re.search(r"rate=(\d+)", mime_type or "", re.IGNORECASE)
+        rate_hz = int(match.group(1)) if match else 24000
+        if len(data) % 2:
+            data = data[:-1]
+        if not data:
+            return None
+        audio = np.frombuffer(data, dtype="<i2").astype(np.float32) / 32768.0
+        return audio, rate_hz
+
+    def _synth_burmese_gemini(self, text, api_key):
+        """Generate one voice-consistent Burmese performance with Gemini TTS."""
+        import base64
+        import urllib.error
+        import urllib.parse
+        import urllib.request
+
+        f = bus.face()
+        v = f.get("voice") or {}
+        default_voice = "Aoede" if f.get("gender", "male") == "female" else "Achird"
+        voice = v.get("gemini") or self.cfg.get("gemini_voice") or default_voice
+        model = self.cfg.get("gemini_model") or "gemini-2.5-flash-preview-tts"
+        timeout = float(self.cfg.get("gemini_timeout_seconds", 45))
+        style = self.cfg.get("gemini_style") or (
+            "Speak in natural, warm, conversational Burmese with native pronunciation, "
+            "smooth pacing, and connected prosody. Treat bracketed cues such as [laugh], "
+            "[giggle], [chuckle], [sigh], and [gasp] as brief performance directions: "
+            "perform each reaction naturally in the same voice, smoothly joined to the "
+            "surrounding speech, and never pronounce the cue word itself. Read only the "
+            "transcript after the marker."
+        )
+        # Google's prompting guide recommends English audio tags and documents
+        # these plural forms. Our parser accepts friendly singular/Burmese
+        # aliases, so normalize its canonical output for the model.
+        for source, target in {
+            "[laugh]": "[laughs]", "[giggle]": "[giggles]",
+            "[chuckle]": "[chuckles]", "[sigh]": "[sighs]",
+            "[throat_clear]": "[cough]", "[yawn]": "[yawns]",
+        }.items():
+            text = text.replace(source, target)
+        prompt = f"{style}\n\nTRANSCRIPT:\n{text}"
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "responseModalities": ["AUDIO"],
+                "speechConfig": {
+                    "voiceConfig": {
+                        "prebuiltVoiceConfig": {"voiceName": voice}
+                    }
+                },
+            },
+        }
+        quoted_model = urllib.parse.quote(str(model), safe="-._")
+        url = ("https://generativelanguage.googleapis.com/v1beta/models/"
+               f"{quoted_model}:generateContent")
+        request = urllib.request.Request(
+            url,
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                result = json.loads(response.read())
+            parts = result.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+            inline = next((p.get("inlineData") for p in parts if p.get("inlineData")), None)
+            if not inline or not inline.get("data"):
+                raise ValueError("response contained no audio")
+            raw = base64.b64decode(inline["data"], validate=True)
+            decoded = self._decode_gemini_audio(raw, inline.get("mimeType", ""))
+            if decoded:
+                log("tts", f"Gemini TTS · {voice}", "gr")
+            return decoded
+        except urllib.error.HTTPError as e:
+            message = f"HTTP {e.code}"
+            try:
+                detail = json.loads(e.read()).get("error", {}).get("message")
+                detail and (message := f"{message}: {detail}")
+            except Exception:
+                pass
+            log("tts", f"{C['am']}Gemini TTS failed ({message}){C['x']}", "am")
+        except Exception as e:
+            log("tts", f"{C['am']}Gemini TTS failed ({e}){C['x']}", "am")
+        return None
 
     def _synth_burmese_emotional(self, text):
-        """Render Burmese text through the Emotion Analyzer & Prosody Injector pipeline.
-        Segments text into emotional clauses, synthesizes each with dynamic pitch/rate,
-        and injects natural breathing pause silences between them.
-        """
+        """Render one clean, continuous Edge utterance with no SFX stitching."""
         if not text or not text.strip():
             return None
 
@@ -1525,44 +2051,18 @@ class Mouth:
         v = (f.get("voice") or {})
         base_rate = v.get("my_rate", "-2%")
         base_pitch = v.get("my_pitch", "+0Hz")
-
-        if not emotion:
-            return self._synth_burmese_edge_bytes(text, pitch=base_pitch, rate=base_rate)
-
-        chunks = emotion.ProsodyInjector.inject_prosody_chunks(
-            text, base_pitch=base_pitch, base_rate=base_rate
-        )
-        if not chunks:
-            return self._synth_burmese_edge_bytes(text, pitch=base_pitch, rate=base_rate)
-
-        import numpy as np
-        all_audio = []
-        sample_rate = 24000
-
-        for i, chunk in enumerate(chunks):
-            if self.stop_flag.is_set():
-                break
-            got = self._synth_burmese_edge_bytes(chunk.text, pitch=chunk.pitch, rate=chunk.rate)
-            if got:
-                audio, rate_hz = got
-                sample_rate = rate_hz
-                all_audio.append(audio)
-                # Inject breathing pause between clauses/sentences if not the last chunk
-                if i < len(chunks) - 1 and chunk.break_ms > 0:
-                    silence_samples = int(sample_rate * (chunk.break_ms / 1000.0))
-                    all_audio.append(np.zeros(silence_samples, dtype=np.float32))
-
-        if not all_audio:
+        formatted = format_burmese_for_speech(
+            clean_spoken_text(text, keep_sfx_tags=False))
+        if not formatted:
             return None
-
-        combined = np.concatenate(all_audio)
-        return combined, sample_rate
+        return self._synth_burmese_edge_bytes(
+            formatted, pitch=base_pitch, rate=base_rate)
 
     def _synth_burmese_edge_bytes(self, text, pitch=None, rate=None):
         """Render a single clause/piece via Microsoft Edge-TTS. Returns (audio, rate) or None.
 
-        Free native neural voices — Thiha and Nilar — modulated across personas
-        and emotions via customized rate and pitch.
+        Free native neural voices — Thiha and Nilar — tuned per persona with a
+        stable rate and pitch. Punctuation supplies phrase-level prosody.
         """
         import asyncio, tempfile
         import numpy as np, soundfile as sf
@@ -1616,48 +2116,122 @@ class Mouth:
                    f"tries ({last}){C['x']}", "am")
         return None
 
+    @staticmethod
+    def _mouth_shape(block, level):
+        """Estimate a compact viseme from a short block of real speech audio."""
+        import numpy as np
+
+        if level < 0.035 or len(block) < 2:
+            return "closed"
+        zcr = float(np.mean(np.abs(np.diff(np.signbit(block)))))
+        if zcr > 0.16:
+            return "consonant"
+        spectrum = np.abs(np.fft.rfft(block))
+        total = float(spectrum.sum())
+        if not total:
+            return "closed"
+        bins = np.arange(len(spectrum), dtype=np.float32)
+        centroid = float(np.dot(bins, spectrum) / total) / max(1, len(spectrum) - 1)
+        if centroid < 0.12:
+            return "oh"
+        return "ee" if centroid > 0.28 else "ah"
+
     def _play(self, audio, rate_hz, on_level=None, text=""):
         """Push samples at the speakers, surviving a device that goes away."""
         import numpy as np, sounddevice as sd
         block = 1024
-        try:
-            with sd.OutputStream(samplerate=rate_hz, channels=1,
-                                 dtype="float32") as out:
+        expression = expression_for_text(text)
+
+        def emit(level, mouth="closed", face_expression=expression):
+            if not on_level:
+                return
+            try:
+                on_level(level, mouth, face_expression)
+            except TypeError:
+                # Third-party callbacks written for the original level-only API.
+                on_level(level)
+
+        def close_output():
+            if self._output_stream is not None:
+                try:
+                    self._output_stream.stop()
+                    self._output_stream.close()
+                except Exception:
+                    pass
+            self._output_stream = None
+            self._output_rate = None
+
+        def play_once():
+            # Reopening CoreAudio between streamed sentences intermittently
+            # returns PaError -9986. One persistent stream removes both that
+            # failure and the audible setup gap between speech chunks.
+            if self._output_stream is None or self._output_rate != rate_hz:
+                close_output()
+                self._output_stream = sd.OutputStream(
+                    samplerate=rate_hz, channels=1, dtype="float32")
+                self._output_stream.start()
+                self._output_rate = rate_hz
+            out = self._output_stream
+            try:
                 for i in range(0, len(audio), block):
                     if self.stop_flag.is_set():
                         break
                     b = audio[i:i + block].astype("float32")
-                    if on_level:
-                        on_level(min(1.0, float(np.sqrt(np.mean(np.square(b)))) * 4))
+                    rms = float(np.sqrt(np.mean(np.square(b)))) if len(b) else 0.0
+                    level = min(1.0, rms * 4)
+                    # A tiny real-time spectral classifier gives the pixel
+                    # face vowel/consonant shapes without phoneme timestamps.
+                    mouth = self._mouth_shape(b, level)
+                    emit(level, mouth)
                     out.write(b.reshape(-1, 1))
-        except Exception as e:
-            # Headphones pulled out mid-sentence, an output device switched, a
-            # sample rate CoreAudio will not take — PortAudio raises, and this
-            # used to travel all the way up and kill the voice loop, so one
-            # unplugged cable ended the session until the app was restarted.
-            log("tts", f"{C['am']}audio output failed ({e}); "
-                       f"using the system voice{C['x']}", "am")
-            text and self._say_fallback(text)
+            except Exception:
+                close_output()
+                raise
+
+        try:
+            play_once()
+        except Exception:
+            # A device may have changed while the stream was idle. Reopen once
+            # before falling back; the retry is quick and fixes normal headset
+            # and Bluetooth transitions.
+            try:
+                time.sleep(0.05)
+                play_once()
+            except Exception as e:
+                # Headphones pulled out mid-sentence, an output device switched,
+                # or a sample rate CoreAudio will not take — keep the session
+                # alive and use the system fallback when it can speak the text.
+                log("tts", f"{C['am']}audio output failed ({e}); "
+                           f"using the system voice{C['x']}", "am")
+                text and self._say_fallback(text)
+        emit(0.0, "closed", "neutral")
         return True
 
     def _speak_burmese_edge(self, text, on_level=None):
-        """Synthesize Burmese using Microsoft's Native Neural Speech Model."""
+        """Synthesize Burmese using the configured Gemini/Edge provider chain."""
         got = self._synth_burmese(text)
         if not got:
             return False
-        return self._play(got[0], got[1], on_level, text)
+        performance_text = (text if self.last_provider == "gemini"
+                            else clean_spoken_text(text, keep_sfx_tags=False))
+        return self._play(got[0], got[1], on_level, performance_text)
 
     def _speak_burmese(self, text, on_level=None):
-        """Synthesize Burmese using native Burmese neural speech models with SSML prosody."""
-        text = format_burmese_for_speech(clean_spoken_text(text))
-        if not text.strip():
+        """Synthesize Burmese with Gemini performance cues or clean Edge speech."""
+        cleaned = clean_spoken_text(text, keep_sfx_tags=True)
+        if not cleaned.strip():
             return True
 
-        return self._speak_burmese_edge(text, on_level)
+        return self._speak_burmese_edge(cleaned, on_level)
 
     def _say_fallback(self, text):
         """Last resort when Kokoro will not load. Ensure fallback voice matches
         the gender and age of the persona."""
+        if not text or not text.strip():
+            return
+        if is_burmese(text):
+            log("tts", f"{C['am']}Burmese neural voice offline — OS voice cannot speak Burmese{C['x']}", "am")
+            return
         f = bus.face()
         gender = f.get("gender", "male")
         age = f.get("age", 25)
@@ -1682,57 +2256,72 @@ class Mouth:
 
     def speak(self, text, on_level=None):
         self.stop_flag.clear()
-        cleaned = clean_spoken_text(text)
+        cleaned = clean_spoken_text(text, keep_sfx_tags=True)
         if not cleaned.strip():
             return
 
         # If the text contains Burmese, synthesize the entire response coherently
-        # using the Burmese Neural Engine. This prevents jarring accent/voice hopping mid-sentence.
+        # using the Burmese Neural Engine with SFX stitching.
         if is_burmese(cleaned):
             self._speak_burmese(cleaned, on_level)
             on_level and on_level(0.0)
             return
 
-        # Pure English response -> synthesize with Kokoro
+        # Pure English response -> synthesize with Kokoro + SFX stitching
         if self.kokoro is None:
-            return self._say_fallback(cleaned)
+            return self._say_fallback(clean_spoken_text(cleaned, keep_sfx_tags=False))
 
         import numpy as np, sounddevice as sd
-        for chunk in self._chunks(cleaned):
+        f = bus.face()
+        v = (f.get("voice") or {})
+        gender = f.get("gender", "male")
+        default_en = "af_heart" if gender == "female" else "am_adam"
+        en_voice = v.get("en", default_en)
+        speed = float(self.cfg.get("speed", 1.0))
+
+        for chunk in self._chunks(clean_spoken_text(cleaned, keep_sfx_tags=False)):
             if self.stop_flag.is_set():
                 break
             try:
-                f = bus.face()
-                v = (f.get("voice") or {})
-                gender = f.get("gender", "male")
-                default_en = "af_heart" if gender == "female" else "am_adam"
-                en_voice = v.get("en", default_en)
-                samples, rate = self.kokoro.create(
-                    chunk, voice=en_voice,
-                    speed=float(self.cfg.get("speed", 1.0)), lang="en-us")
+                samples, rate = self.kokoro.create(chunk, voice=en_voice, speed=speed, lang="en-us")
+                self._play(samples, rate, on_level, chunk)
             except Exception as e:
-                log("tts", f"{C['am']}kokoro failed mid-speech ({e}){C['x']}", "am")
-                return self._say_fallback(chunk)
-
-            block = 1024
-            with sd.OutputStream(samplerate=rate, channels=1, dtype="float32") as out:
-                for i in range(0, len(samples), block):
-                    if self.stop_flag.is_set():
-                        break
-                    b = samples[i:i + block].astype("float32")
-                    if on_level:
-                        on_level(min(1.0, float(np.sqrt(np.mean(np.square(b)))) * 4))
-                    out.write(b.reshape(-1, 1))
+                log("tts", f"{C['am']}kokoro failed ({e}){C['x']}", "am")
         on_level and on_level(0.0)
 
-    # Streaming renders in units small enough that the next one is ready before
-    # the current finishes. Whole-block speech deliberately never splits Burmese
-    # (LIMIT_MY is 4000), and a 27-second blob takes ~5s to synthesise — long
-    # enough to run the speakers dry and put a hole in the middle of the answer.
-    # ~15 Burmese characters is about a second of speech, so this is roughly
-    # six seconds a unit: long enough not to sound chopped, short enough that
-    # rendering it (~0.8s) finishes well inside the previous unit's playback.
-    STREAM_LIMIT_MY = 90
+    # Two typical Burmese sentences give the neural voice enough context for a
+    # natural rise and fall while remaining short enough to render ahead of
+    # playback. Previously every sentence (and originally every comma) became a
+    # fresh request, repeatedly resetting intonation.
+    STREAM_LIMIT_MY = 180
+    STREAM_SENTENCES_MY = 2
+
+    @classmethod
+    def _stream_batches(cls, pieces):
+        """Format and combine adjacent streamed sentences for vocal context."""
+        batch = []
+        size = 0
+        first = True
+        for piece in pieces:
+            whole = format_burmese_for_speech(
+                clean_spoken_text(piece, keep_sfx_tags=True))
+            if not whole.strip():
+                continue
+            # Start the opening sentence immediately. Later sentences may still
+            # share requests for smoother prosody while that first audio plays.
+            if first:
+                first = False
+                yield whole
+                continue
+            if batch and (len(batch) >= cls.STREAM_SENTENCES_MY
+                          or size + 1 + len(whole) > cls.STREAM_LIMIT_MY):
+                yield " ".join(batch)
+                batch = []
+                size = 0
+            batch.append(whole)
+            size += len(whole) + (1 if size else 0)
+        if batch:
+            yield " ".join(batch)
 
     @classmethod
     def _stream_units(cls, text):
@@ -1751,7 +2340,7 @@ class Mouth:
         return out or [text]
 
     def speak_burmese_stream(self, pieces, on_level=None):
-        """Speak Burmese as the brain writes it, one sentence at a time.
+        """Speak Burmese as the brain writes it, in short contextual batches.
 
         The whole reply used to be held back until the last word was generated,
         because splitting it by script sent each fragment to a different voice
@@ -1760,20 +2349,17 @@ class Mouth:
         nothing hops — he simply starts hearing the answer about six seconds
         sooner, which is most of the wait.
 
-        A worker renders ahead while the speakers are busy, so the joins between
-        sentences are silent rather than a pause per full stop.
+        A worker renders ahead while the speakers are busy. Adjacent short
+        sentences share a synthesis request, preserving neural vocal context.
         """
         self.stop_flag.clear()
         q = queue.Queue(maxsize=3)
 
         def render():
             try:
-                for piece in pieces:
+                for whole in self._stream_batches(pieces):
                     if self.stop_flag.is_set():
                         break
-                    whole = format_burmese_for_speech(clean_spoken_text(piece))
-                    if not whole.strip():
-                        continue
                     units = self._stream_units(whole)
                     for text in units:
                         if self.stop_flag.is_set():
@@ -1796,9 +2382,12 @@ class Mouth:
                 break
             audio, rate_hz, text = item
             if audio is None:
-                self._say_fallback(text)
+                # Never let an OS fallback pronounce a reaction tag aloud.
+                self._say_fallback(clean_spoken_text(text, keep_sfx_tags=False))
             else:
-                self._play(audio, rate_hz, on_level, text)
+                performance_text = (text if self.last_provider == "gemini"
+                                    else clean_spoken_text(text, keep_sfx_tags=False))
+                self._play(audio, rate_hz, on_level, performance_text)
         on_level and on_level(0.0)
 
     def interrupt(self):
@@ -2018,7 +2607,108 @@ def setkey():
     print(f"\n  {C['gr']}talk key set to {spec}{C['x']}")
     print(f"  saved to {CONFIG_PATH}")
     print("  restart Lugalay to use it.\n")
-    return 0
+def generate_startup_greeting(user, name, lang="my"):
+    """Generate dynamic, time-aware, varied greetings with natural spoken cadence."""
+    import datetime
+    import random
+
+    now = datetime.datetime.now()
+    hour = now.hour
+    user_display = (user or "").strip()
+    user_tag = f" {user_display}" if user_display else ""
+
+    cfg = bus.config()
+    custom_greeting = cfg.get("greeting")
+
+    # If user provided a custom list of greetings in config, pick from it
+    if isinstance(custom_greeting, list) and custom_greeting:
+        choice = random.choice(custom_greeting)
+        try:
+            return choice.format(user=user, name=name)
+        except Exception:
+            return str(choice)
+
+    # If user explicitly set a non-default custom greeting template that isn't the stock default
+    if isinstance(custom_greeting, str) and custom_greeting.strip() and "ဒီနေ့ ဘာအစီအစဉ်ရှိလဲ" not in custom_greeting:
+        try:
+            return custom_greeting.format(user=user, name=name)
+        except Exception:
+            return custom_greeting
+
+    if lang == "my":
+        if 5 <= hour < 12:
+            options = [
+                f"မင်္ဂလာ မနက်ခင်းပါ{user_tag}။ ဒီနေ့ ဘာတွေ အတူတူ လုပ်ကြမလဲခင်ဗျာ။",
+                f"မနက်ခင်းလေးမှာ တွေ့ရတာ ဝမ်းသာပါတယ်{user_tag}။ ကော်ဖီလေး သောက်ပြီး အလုပ်တွေ စလိုက်ကြရအောင်နော်။",
+                f"မင်္ဂလာပါ{user_tag}။ ဒီနေ့ မနက်ခင်းတော့ လန်းလန်းဆန်းဆန်း ရှိနေပြီ ထင်တယ်နော်၊ ဘာကူညီပေးရမလဲခင်ဗျာ။",
+                f"ဟိုင်း{user_tag}၊ မင်္ဂလာ မနက်ခင်းပါနော်။ ဒီနေ့ ပရောဂျက်လေးတွေ စကြမလားခင်ဗျာ။",
+            ]
+        elif 12 <= hour < 17:
+            options = [
+                f"မင်္ဂလာ နေ့လယ်ခင်းပါ{user_tag}။ ထမင်းစားပြီးပြီလားခင်ဗျာ၊ အလုပ်တွေ ဘယ်လို အခြေအနေ ရှိလဲ။",
+                f"မင်္ဂလာပါ{user_tag}။ နေ့လယ်ပိုင်း အလုပ်လေးတွေ ဆက်လုပ်ကြမလားခင်ဗျာ။",
+                f"ဟိုင်း{user_tag}၊ နေ့လယ်ခင်းလေးမှာ တွေ့ရတာ ဝမ်းသာပါတယ်နော်။ ဘာများ ကူညီပေးရမလဲ။",
+                f"မင်္ဂလာ နေ့လယ်ခင်းပါ{user_tag}။ ဘာတွေ အတူတူ တိုင်ပင်ကြမလဲခင်ဗျာ။",
+            ]
+        elif 17 <= hour < 22:
+            options = [
+                f"မင်္ဂလာ ညနေခင်းပါ{user_tag}။ ဒီနေ့ တစ်နေ့တာ အဆင်ပြေရဲ့လားခင်ဗျာ၊ ဘာတွေ ကူညီပေးရမလဲ။",
+                f"မင်္ဂလာပါ{user_tag}။ ညနေစောင်းလေးမှာ ဘာတွေ အတူတူ ဆွေးနွေးကြမလဲနော်။",
+                f"ဟိုင်း{user_tag}၊ တစ်နေ့လုံး ပင်ပန်းထားသမျှ အနားယူရင်း ဘာတွေ ဆက်လုပ်ကြမလဲ ပြောပြပါဦး။",
+                f"မင်္ဂလာ ညနေခင်းပါ{user_tag}။ အဆင်သင့် ရှိနေပါပြီနော်၊ ဘာလုပ်ပေးရမလဲခင်ဗျာ။",
+            ]
+        else:  # Late night / early morning (22:00 - 04:59)
+            options = [
+                f"မင်္ဂလာ ညဉ့်နက်ပိုင်းပါ{user_tag}။ ညဉ့်နက်ထိ အလုပ်လုပ်နေတာလားခင်ဗျာ၊ ဘာ ကူညီပေးရမလဲ။",
+                f"ဟဲဟဲ{user_tag} ကတော့ ညဘက်မှ ပိုလန်းနေတဲ့ ပုံပဲနော်။ ဘာ ပရောဂျက် အသစ်တွေ စမ်းနေတာလဲခင်ဗျာ။",
+                f"မင်္ဂလာပါ{user_tag}။ ညဉ့်နက်ပြီမို့ ကျန်းမာရေးလည်း ဂရုစိုက်ဦးနော်၊ ဘာ အကူအညီ လိုအပ်လဲခင်ဗျာ။",
+                f"ဟိုင်း{user_tag}၊ ညဉ့်နက် အလုပ်ချိန်လေးမှာ ဘာတွေ အတူတူ ဖန်တီးကြမလဲခင်ဗျာ။",
+            ]
+
+        general_options = [
+            f"မင်္ဂလာပါ{user_tag}။ ဒီနေ့ ဘာ ထူးခြားတာလေးတွေ ရှိလဲခင်ဗျာ။",
+            f"ဟိုင်း{user_tag}၊ ပြန်ဆုံရတာ ဝမ်းသာပါတယ်နော်။ ဒီနေ့ ဘာတွေ တိုင်ပင်ကြမလဲ။",
+            f"မင်္ဂလာပါ{user_tag}။ အဆင်သင့် ဖြစ်နေပါပြီနော်၊ ဘာ အကူအညီ လိုအပ်လဲခင်ဗျာ။",
+            f"ဟဲဟဲ{user_tag} ရေ၊ မင်္ဂလာပါခင်ဗျာ။ ဒီနေ့ ဘာ အသစ်တွေ အတူတူ ဖန်တီးကြမလဲ။",
+        ]
+        pool = options if random.random() < 0.75 else general_options
+        greeting = random.choice(pool)
+        return normalize_burmese_spoken(greeting)
+
+    else:
+        # English dynamic greetings
+        if 5 <= hour < 12:
+            options = [
+                f"Good morning{user_tag}! Ready to get started on today's work?",
+                f"Good morning{user_tag}! Grab your coffee and let's build something great.",
+                f"Hey{user_tag}, good morning! What are we tackling first today?",
+            ]
+        elif 12 <= hour < 17:
+            options = [
+                f"Good afternoon{user_tag}! How is everything going today?",
+                f"Hey{user_tag}, good afternoon! What are we working on?",
+                f"Good afternoon{user_tag}! Ready whenever you are.",
+            ]
+        elif 17 <= hour < 22:
+            options = [
+                f"Good evening{user_tag}! How was your day?",
+                f"Good evening{user_tag}! What shall we work on tonight?",
+                f"Hey{user_tag}, winding down or starting a new session?",
+            ]
+        else:
+            options = [
+                f"Hey{user_tag}, burning the midnight oil? How can I assist?",
+                f"Working late tonight{user_tag}? I'm right here with you.",
+                f"Night owl session, {user_display or 'friend'}! What are we hacking on?",
+            ]
+
+        general_options = [
+            f"Hey{user_tag}, great to see you! What's on your mind?",
+            f"Hello{user_tag}! Ready to help whenever you need.",
+            f"Hey{user_tag}, all systems ready. What are we building today?",
+        ]
+        pool = options if random.random() < 0.75 else general_options
+        return random.choice(pool)
 
 
 def main():
@@ -2040,11 +2730,12 @@ def main():
     name, user = CFG.get("name", "Agent"), CFG.get("user", "there")
     mouth = Mouth(CFG)
 
-    def level(v):
-        bus.write("speaking", bus.read().get("text", ""), v)
+    def level(v, mouth="closed", expression="neutral"):
+        bus.write("speaking", bus.read().get("text", ""), v,
+                  mouth=mouth, expression=expression)
 
     if a.say:
-        bus.write("speaking", a.say, 0.5)
+        bus.write("speaking", clean_spoken_text(a.say, keep_sfx_tags=False), 0.5)
         mouth.speak(a.say, level)
         bus.write("idle")
         return 0
@@ -2060,7 +2751,7 @@ def main():
         log("you", a.text, "cy")
         reply = brain.ask(a.text)
         log(name.lower(), reply, "gr")
-        bus.write("speaking", reply, 0.4)
+        bus.write("speaking", clean_spoken_text(reply, keep_sfx_tags=False), 0.4)
         mouth.speak(reply, level)
         bus.write("idle")
         return 0
@@ -2117,10 +2808,11 @@ def main():
 
         if not streaming:
             reply = brain.ask(asked, lang=target_lang)
+            display_text = clean_spoken_text(reply, keep_sfx_tags=False)
             if is_my:
-                reply = format_burmese_for_speech(clean_spoken_text(reply))
+                display_text = format_burmese_for_speech(display_text)
             log(name.lower(), reply, "gr")
-            bus.write("speaking", reply, 0.4)
+            bus.write("speaking", display_text, 0.4)
             mouth.speak(reply, level)
             bus.write("idle")
             return
@@ -2187,12 +2879,8 @@ def main():
         print(f"\n{C['b']}{name}{C['x']} {C['dim']}· hold {key} and speak "
               f"· ctrl-c to stop{C['x']}\n")
 
-    tmpl = CFG.get("greeting") if CFG.get("language", {}).get("reply") == "my" \
-        else CFG.get("greeting_en", CFG.get("greeting", "Hello {user}."))
-    try:
-        greeting = tmpl.format(user=user, name=name)
-    except (KeyError, IndexError):
-        greeting = tmpl
+    reply_lang = CFG.get("speak_language") or CFG.get("language", {}).get("reply", "my")
+    greeting = generate_startup_greeting(user, name, lang=reply_lang)
     bus.write("speaking", greeting, 0.4)
     log(name.lower(), greeting, "gr")
     mouth.speak(greeting, level)

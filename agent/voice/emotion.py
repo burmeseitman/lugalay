@@ -32,17 +32,17 @@ class EmotionChunk:
 # Emotion mapping deltas calibrated for natural Edge-TTS prosody without persona drift
 PROSODY_MAP = {
     EmotionType.EXCITED: {
-        "pitch_delta_hz": 2,      # Subtle natural brightness
-        "rate_delta_pct": 4,      # Lively tempo
+        "pitch_delta_hz": 2,      # Bright, enthusiastic lift
+        "rate_delta_pct": 4,      # Upbeat tempo
         "break_ms": 250,
     },
     EmotionType.SERIOUS: {
-        "pitch_delta_hz": -2,     # Thoughtful, calm gravity
-        "rate_delta_pct": -4,     # Measured tempo
+        "pitch_delta_hz": -2,     # Thoughtful gravity, calm & reassuring
+        "rate_delta_pct": -4,     # Measured cadence
         "break_ms": 650,
     },
     EmotionType.CALM: {
-        "pitch_delta_hz": 0,      # Consistent persona baseline
+        "pitch_delta_hz": 0,      # Natural persona baseline
         "rate_delta_pct": 0,
         "break_ms": 400,
     },
@@ -58,20 +58,26 @@ _SERIOUS_WORDS = {
     "သတိထား", "စိတ်မကောင်း", "ဝမ်းနည်း", "အန္တရာယ်", "ပြဿနာ", "အရေးကြီး",
     "မှား", "ပျက်", "ဆုံးရှုံး", "ခက်ခဲ", "မဖြစ်နိုင်", "ဆိုး", "သတိပြု",
     "အထူးဂရုစိုက်", "ကြေကွဲ", "အမှား", "မကောင်း", "စိတ်ညစ်", "စိတ်ပူ",
-    "ဟင့်အင်း", "မရဘူး", "မဖြစ်ပါဘူး"
+    "ဟင့်အင်း", "မရဘူး", "မဖြစ်ပါဘူး", "အဆင်မပြေ", "သတိပေး", "စိုးရိမ်",
+    "ပျက်စီး", "မှားယွင်း", "တားမြစ်", "သတိထားပါ"
 }
 
 _EXCITED_WORDS = {
     "ဝမ်းသာ", "ပျော်", "သတင်းကောင်း", "ကောင်းလိုက်တာ", "မိုက်တယ်",
     "အောင်မြင်", "ကြိုဆို", "လှလိုက်တာ", "သဘောကျ", "အဆင်ပြေသွားပြီ",
     "အရမ်းကောင်း", "အရမ်းလှ", "အရမ်းပျော်", "ဟေး", "ဝိုး", "အံ့သြ",
-    "မင်္ဂလာပါ", "ကြိုးစား", "အားရစရာ", "ကြိုက်တယ်", "ဟုတ်တယ်ဗျာ"
+    "မင်္ဂလာပါ", "ကြိုးစား", "အားရစရာ", "ကြိုက်တယ်", "ဟုတ်တယ်ဗျာ",
+    "အရမ်းမိုက်", "အရမ်းလန်း", "ကျေးဇူးတင်", "ကျေးဇူးပါ", "လက်ခုပ်",
+    "ကြိုဆိုပါတယ်", "ဂုဏ်ယူ", "အဆင်ပြေတယ်",
+    # Laughter & humor triggers
+    "ဟဲဟဲ", "ဟားဟား", "အဟဲ", "အဟင်း", "ရယ်ရတယ်", "ရယ်စရာ", "ဟာသ",
+    "ရယ်ချင်", "ပျော်စရာကြီး", "အဟား"
 }
 
 _QUESTION_WORDS = {
     "လား", "လဲ", "ပါသလား", "ပါသလဲ", "ပါ့မလား", "ဘာလဲ", "ဘယ်သူ", "ဘယ်လို",
     "ဘယ်အချိန်", "ဘယ်မှာ", "ဘယ်အတွက်", "ဘယ်တော့", "ဟုတ်လား", "အဆင်ပြေရဲ့လား",
-    "ဘာဖြစ်လို့", "ဟုတ်ရဲ့လား", "ရမလား"
+    "ဘာဖြစ်လို့", "ဟုတ်ရဲ့လား", "ရမလား", "ဘာများလဲ", "ဘယ်လိုလဲ", "ဟုတ်ပါသလား"
 }
 
 

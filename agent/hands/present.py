@@ -17,7 +17,7 @@ import bus  # noqa: E402
 
 PORT = int(bus.config().get("hands_port", 7318))
 BASE = f"http://127.0.0.1:{PORT}"
-BOARD = os.path.join(HERE, "state", "board.json")
+BOARD = os.path.join(bus.ROOT, "hands", "state", "board.json")
 TINTS = ["#39d0d8", "#52e39f", "#f0a830", "#c58af0", "#f07a7a"]
 
 

@@ -27,6 +27,30 @@ HOME = bus.HOME
 TEMPLATES = bus.resource("templates")
 
 
+def set_gemini_api_key(cfg, value=None, clear=False):
+    """Safely update the saved Gemini key without ever returning or logging it."""
+    tts = cfg.setdefault("tts", {})
+    if clear:
+        tts.pop("gemini_api_key", None)
+        # Clear the legacy field too, otherwise it would silently remain active.
+        tts["api_key"] = ""
+        return False
+    if value is None:
+        return bool(tts.get("gemini_api_key") or tts.get("api_key"))
+
+    key = str(value).strip()
+    if not key or key.startswith("•"):
+        return bool(tts.get("gemini_api_key") or tts.get("api_key"))
+    if len(key) > 512 or any(ch.isspace() or ord(ch) < 32 for ch in key):
+        raise ValueError("Gemini API key must be a single value without spaces")
+
+    # New writes use an explicit provider-specific field. Remove the old
+    # generic copy so the secret exists only once in the owner-only config.
+    tts["gemini_api_key"] = key
+    tts["api_key"] = ""
+    return True
+
+
 def detect_name():
     """The account's full name is a decent guess, never an assumption."""
     if sys.platform == "darwin":
@@ -76,11 +100,13 @@ def render(user, agent="Lugalay", agent_my="လူကလေး"):
             continue
         if os.path.exists(dest):
             backup = dest + ".before-setup"
-            if not os.path.exists(backup):
+            try:
                 with open(dest, encoding="utf-8") as f:
                     old = f.read()
                 with open(backup, "w", encoding="utf-8") as f:
                     f.write(old)
+            except OSError:
+                pass
         with open(src, encoding="utf-8") as f:
             body = f.read()
         body = (body.replace("{{USER}}", user)
@@ -106,10 +132,9 @@ def apply(answers):
     cfg["name"] = agent
     cfg.setdefault("language", {})["listen"] = listen_lang
     cfg.setdefault("language", {})["reply"] = speak_lang
-    if "api_key" in answers:
-        key = (answers.get("api_key") or "").strip()
-        if key and not key.startswith("•"):
-            cfg.setdefault("tts", {})["api_key"] = key
+    if "gemini_api_key" in answers or "api_key" in answers:
+        set_gemini_api_key(
+            cfg, answers.get("gemini_api_key", answers.get("api_key")))
     if face in [f["id"] for f in cfg.get("faces", [])]:
         cfg["face"] = face
         try:

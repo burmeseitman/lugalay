@@ -82,9 +82,13 @@ def remember(note, file="daily"):
     note = (note or "").strip()[:MAX_NOTE]
     if not note:
         return "Nothing to write."
-    if file in ("daily", "", None):
+    is_daily = file in ("daily", "", None)
+    if is_daily:
         import datetime
-        file = "daily/" + datetime.date.today().isoformat()
+        now = datetime.datetime.now()
+        file = "daily/" + now.date().isoformat()
+        if not note.startswith(("-", "#", "*")):
+            note = f"- **{now.strftime('%H:%M')}**: {note}"
     full = _safe_path(file)
     if not full:
         return "That is not a place in the memory vault."

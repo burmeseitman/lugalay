@@ -9,7 +9,9 @@
   *{box-sizing:border-box}
   html,body{height:100%;margin:0;background:transparent;overflow:hidden}
   /* the dark card IS the window — the native one is transparent */
-  #plate{position:fixed;inset:0;z-index:0;background:var(--bg);border-radius:14px;
+  #plate{position:fixed;inset:0;z-index:0;
+         background:radial-gradient(circle at 50% 40%,rgba(38,76,82,.25) 0%,rgba(4,7,10,0) 48%),var(--bg);
+         border-radius:14px;
          border:1px solid rgba(120,160,175,.10);transition:opacity .25s ease}
   /* overlay mode: nothing but the avatar */
   html.zen #plate,
@@ -113,6 +115,10 @@
            background: transparent; border: 0; color: var(--dim); font-size: 14px; padding: 4px}
   .provider-badge{display:inline-block;margin-top:5px;font-size:11px;color:#7bf5bb;
                   opacity:.9;letter-spacing:.05em}
+  .key-meta{display:flex;align-items:center;justify-content:space-between;min-height:25px}
+  .key-remove{border:0;background:transparent;color:#ff9a82;font:inherit;font-size:11px;
+              cursor:pointer;padding:5px 0}
+  .key-remove[hidden]{display:none}
   .btn-row{display:flex;gap:10px;margin-top:20px}
   .btn-save{flex:1;background:var(--accent,#39d0d8);border:0;color:#04212a;padding:10px;
             font:inherit;font-size:12px;font-weight:700;letter-spacing:.15em;
@@ -166,6 +172,17 @@
     <label for="cfg_face">Voice &amp; Face</label>
     <select id="cfg_face"></select>
 
+    <label for="cfg_gemini_key">Gemini API Key</label>
+    <div class="key-row">
+      <input id="cfg_gemini_key" type="password" autocomplete="new-password"
+             autocapitalize="none" spellcheck="false" placeholder="Paste a Gemini API key">
+      <button id="cfg_key_eye" class="eye-btn" type="button" aria-label="Show API key">◉</button>
+    </div>
+    <div class="key-meta">
+      <span id="cfg_key_status" class="provider-badge">Checking…</span>
+      <button id="cfg_key_remove" class="key-remove" type="button" hidden>Remove saved key</button>
+    </div>
+
     <div style="margin-top:14px">
       <button id="cfg_hands_btn" type="button" style="width:100%;background:#0d1820;border:1px solid #1e303d;color:#39d0d8;padding:8px;font:inherit;font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;border-radius:6px;cursor:pointer">🖐️ Open Hands &amp; Vision Board (H)</button>
     </div>
@@ -197,6 +214,7 @@ const STATES = {
 /* ---------- live state, smoothed ---------- */
 const S = {
   name:"Agent", face:"aung", state:"idle", text:"", level:0,
+  mouth:"closed", expression:"neutral",
   persona:null, personas:[],
   energy:0.1, colour:"#2f7f8a", accent:"#39d0d8", t:0, online:true,
 };
@@ -222,34 +240,12 @@ function resize(){
 }
 addEventListener("resize",resize);
 
-/* ---------- geometry helper: polyline sampling ---------- */
-function poly(pts){
-  const seg=[]; let total=0;
-  for(let i=1;i<pts.length;i++){
-    const d=Math.hypot(pts[i][0]-pts[i-1][0], pts[i][1]-pts[i-1][1]);
-    seg.push(d); total+=d;
-  }
-  return { pts, seg, total, at(dist){
-    let d=Math.max(0,Math.min(dist,this.total));
-    for(let i=0;i<this.seg.length;i++){
-      if(d<=this.seg[i]||i===this.seg.length-1){
-        const k=this.seg[i]?d/this.seg[i]:0, a=this.pts[i], b=this.pts[i+1];
-        return [a[0]+(b[0]-a[0])*k, a[1]+(b[1]-a[1])*k];
-      }
-      d-=this.seg[i];
-    }
-    return this.pts[this.pts.length-1];
-  }};
-}
-const rand=(a,b)=>a+Math.random()*(b-a);
-const pick=a=>a[(Math.random()*a.length)|0];
-
-/* ============ FACE 1: PIXEL — a human face, chunky pixels ============= */
+/* ============ PIXEL AVATAR — the living human face ============= */
 const pixel={
   GW:52, GH:53, P:8, ox:0, oy:0, fade:1,
   blinkAt:2.2, blinkTil:-1,
   look:{x:0,y:0,tx:0,ty:0,at:1.5},
-  mouthOpen:0, viseme:0, browT:0,
+  mouthOpen:0, browT:0, poseX:0, poseY:0,
   build(){
     // The bottom of the window belongs to the caption and the hud, so fit the
     // face into the space above it. How much that is depends on how much he is
@@ -265,7 +261,8 @@ const pixel={
   px(x,y,w,h,col){
     if(w<=0||h<=0) return;
     ctx.fillStyle=col;
-    ctx.fillRect(this.ox+Math.round(x)*this.P, this.oy+Math.round(y)*this.P,
+    ctx.fillRect(this.ox+Math.round((x+this.poseX)*this.P),
+                 this.oy+Math.round((y+this.poseY)*this.P),
                  Math.round(w)*this.P, Math.round(h)*this.P);
   },
   blob(x,y,w,h,col,ins){
@@ -291,6 +288,10 @@ const pixel={
       this.px(x+1+lx, y+3, 2, 1, ink);
       return;
     }
+    if(shape==="happy"){                        // cheek-raised smiling eyes
+      this.px(x, y+2, 1, 1, ink); this.px(x+1, y+3, 3, 1, ink);
+      this.px(x+4, y+2, 1, 1, ink); return;
+    }
     const tall = shape==="wide" ? 6 : 5;        // wide = listening
     this.blob(x, y+(5-tall), 5, tall, white, [1]);
     const pxx = x+2+lx, pyy = y+(5-tall)+Math.round(tall/2)-1+ly;
@@ -299,23 +300,36 @@ const pixel={
   },
 
   /* eyebrows carry most of the expression */
-  brow(x, y, dir, col){
-    // dir: 0 flat, +1 inner-down (furrowed), -1 inner-up (worried), 2 raised
-    if(dir===2){ this.px(x, y-1, 5, 1, col); return; }
-    if(dir===0){ this.px(x, y, 5, 1, col); return; }
-    if(dir===1){ this.px(x, y, 3, 1, col); this.px(x+3, y-1, 2, 1, col); return; }
-    this.px(x, y-1, 3, 1, col); this.px(x+3, y, 2, 1, col);
+  brow(x, y, dir, col, mirror=false){
+    // Five independently positioned pixels let the expression ease instead
+    // of snapping between three pre-drawn eyebrow sprites.
+    for(let i=0;i<5;i++){
+      const inner=mirror ? i/4 : (4-i)/4;
+      let dy=0;
+      if(dir>1) dy=-Math.min(1.25,dir*.55);       // attentive / surprised
+      else if(dir>0) dy=-inner*dir;              // focused
+      else if(dir<0) dy=-(1-inner)*(-dir);       // worried / tired
+      this.px(x+i,y+dy,1,1,col);
+    }
   },
 
-  mouth(cx, y, state, open, t, ink, lip){
+  mouth(cx, y, state, open, viseme, t, ink, lip){
     if(state==="speaking"){
-      // alternate between an "ah" and an "oh" so it reads as speech,
-      // not a hole that simply grows
-      const round = (Math.sin(t*6.1)*0.5+0.5);
-      const h = 1 + Math.round(open*3.4);
-      const w = Math.round(3 + open*(round<0.5 ? 5.2 : 2.6));
-      this.blob(cx-Math.round(w/2), y, w, h+1, ink, [1]);
-      this.px(cx-Math.round(w/2), y+h+1, w, 1, lip);   // lower lip
+      if(viseme==="closed" || open<.04){ this.px(cx-2,y+1,5,1,lip); return; }
+      if(viseme==="consonant"){
+        this.px(cx-3,y,7,1,lip); this.px(cx-2,y+1,5,1,ink); return;
+      }
+      if(viseme==="oh"){
+        const h=2+Math.round(open*3);
+        this.blob(cx-2,y-1,4,h+2,ink,[1]);
+        this.px(cx-1,y+h,2,1,lip); return;
+      }
+      if(viseme==="ee"){
+        this.px(cx-4,y,9,1,lip); this.blob(cx-3,y+1,7,2,ink,[1]); return;
+      }
+      const h=2+Math.round(open*3);               // open "ah"
+      this.blob(cx-3,y-1,7,h+2,ink,[1]);
+      this.px(cx-2,y+h,5,1,lip);
       return;
     }
     if(state==="listening"){ this.blob(cx-2, y, 4, 3, ink, [1]); return; }
@@ -331,6 +345,11 @@ const pixel={
 
   draw(dt){
     const now=S.t, st=S.state;
+    const mood=S.expression;
+    const P0 = S.persona || {};
+    const phase=(P0.id||"aung").split("").reduce((n,c)=>n+c.charCodeAt(0),0)*.07;
+    const breath=Math.sin(now*1.65+phase);
+    const voiceBeat=st==="speaking" ? Math.sin(now*8.5+phase)*S.level : 0;
 
     if(now>this.blinkAt){
       this.blinkAt = now + 1.8 + Math.random()*4.5;
@@ -340,8 +359,8 @@ const pixel={
 
     if(now>this.look.at){
       this.look.at = now + 1.4 + Math.random()*3.2;
-      this.look.tx = st==="thinking" ? -1 : Math.round(Math.random()*2-1);
-      this.look.ty = st==="thinking" ? -1 : 0;
+      this.look.tx = st==="thinking" ? -1 : (st==="listening"||st==="speaking" ? 0 : Math.round(Math.random()*2-1));
+      this.look.ty = st==="thinking" ? -1 : (mood==="tired" ? 1 : 0);
     }
     this.look.x += (this.look.tx-this.look.x)*Math.min(1,dt*6);
     this.look.y += (this.look.ty-this.look.y)*Math.min(1,dt*6);
@@ -349,7 +368,6 @@ const pixel={
 
     const lx=Math.round(this.look.x), ly=Math.round(this.look.y);
 
-    const P0 = S.persona || {};
     const skin  = P0.skin  || "#d9a279";
     const shade = P0.shade || "#b8825c";
     const hair  = mix(P0.hair || "#3a2b25", S.accent, 0.08);
@@ -363,6 +381,27 @@ const pixel={
     const CX = 26;                      // face centre — nothing moves sideways
     const hx = 15, hy = 12, hw = 23, hh = 25;
 
+    // A quiet pool of light grounds the portrait. State pulses sit behind the
+    // head, preserving the pixel character while making listening unmistakable.
+    const screenCX=this.ox+CX*this.P, baseY=this.oy+(hy+hh+14)*this.P;
+    ctx.save();
+    ctx.fillStyle=rgba("#000000",.28);
+    ctx.beginPath(); ctx.ellipse(screenCX,baseY,15*this.P,1.7*this.P,0,0,Math.PI*2); ctx.fill();
+    if(st==="listening" || st==="speaking"){
+      const pulse=(now*(st==="listening"?1.8:1.15))%1;
+      for(let i=0;i<2;i++){
+        const k=(pulse+i*.5)%1, radius=(15+k*8)*this.P;
+        ctx.beginPath(); ctx.arc(screenCX,this.oy+(hy+12)*this.P,radius,0,Math.PI*2);
+        ctx.strokeStyle=rgba(S.accent,(1-k)*(st==="listening"?.22:.10));
+        ctx.lineWidth=Math.max(1,this.P*.32); ctx.stroke();
+      }
+    }
+    ctx.restore();
+
+    // Torso breathes more slowly than the head; speech adds tiny rhythmic
+    // nods, never enough to make a pixel portrait feel wobbly.
+    this.poseX=0; this.poseY=breath*.10;
+
     // soft glow so the head reads against the dark, and carries state colour
     ctx.save();
     ctx.shadowBlur = 34 + 70*S.energy;
@@ -371,8 +410,12 @@ const pixel={
     // ── neck, then torso running off the bottom edge ──
     this.px(CX-3, hy+hh-3, 7, 7, shade);                 // neck meets the body
     this.px(CX-3, hy+hh-3, 7, 2, mix(shade,"#000000",0.18));   // jaw shadow
-    this.blobT(9, hy+hh+3, 34, 12, shirt, [9,5,3,2,1,1]);
+    this.blobT(10, hy+hh+3, 32, 12, shirt, [8,5,3,2,1,1]);
+    this.px(CX-5,hy+hh+4,10,1,mix(shirt,"#ffffff",.10));
     ctx.restore();
+
+    this.poseX=Math.sin(now*.72+phase)*.10;
+    this.poseY=breath*.16-voiceBeat*.10;
 
     // ── face ──
     this.blob(hx, hy, hw, hh, skin, [5,3,2,1,1]);
@@ -414,16 +457,21 @@ const pixel={
     if(st==="listening") bdir = 2;
     else if(st==="thinking") bdir = 1;
     else if(st==="error") bdir = -1;
+    else if(mood==="surprised") bdir = 2.2;
+    else if(mood==="curious") bdir = .75;
+    else if(mood==="tired") bdir = -.65;
     this.browT += ((bdir)-this.browT)*Math.min(1,dt*7);
     const by = hy+10;
-    this.brow(hx+4,  by, bdir, hair);
-    this.brow(hx+14, by, bdir===1?1:(bdir===-1?-1:bdir), hair);
+    this.brow(hx+4,  by, this.browT, hair, false);
+    this.brow(hx+14, by, this.browT, hair, true);
 
     // ── eyes ──
     let shape = "normal";
     if(blinking) shape="blink";
     else if(st==="thinking") shape="squint";
     else if(st==="listening") shape="wide";
+    else if(mood==="amused") shape="happy";
+    else if(mood==="surprised") shape="wide";
     const ey = hy+12;
     this.eye(hx+4,  ey, shape, lx, ly, ink, white);
     this.eye(hx+14, ey, shape, lx, ly, ink, white);
@@ -434,7 +482,7 @@ const pixel={
 
     // ── blush ──
     if((st==="idle"||st==="speaking") && !P0.beard){
-      const a = st==="speaking" ? 0.42 : 0.28;
+      const a = mood==="amused" ? .62 : (st==="speaking" ? 0.42 : 0.28);
       this.px(hx+2,      hy+17, 4, 2, rgba("#e0664f", a));
       this.px(hx+hw-6,   hy+17, 4, 2, rgba("#e0664f", a));
     }
@@ -454,7 +502,7 @@ const pixel={
     }
 
     // ── mouth ──
-    this.mouth(CX, hy+19, st, this.mouthOpen, now, ink, lip);
+    this.mouth(CX, hy+19, st, this.mouthOpen, S.mouth, now, ink, lip);
 
     // ── thinking dots, clear of the head ──
     if(st==="thinking"){
@@ -473,253 +521,10 @@ const pixel={
       }
     }
 
+    this.poseX=0; this.poseY=0;
+
   }
 };
-
-/* ================= FACE 2: BOARD — the living circuit board ============ */
-const board={
-  traces:[], pulses:[], chip:null,
-  build(){
-    const cx=W/2, cy=H/2;
-    const cw=Math.min(W*0.30, 420), ch=cw*0.42;
-    this.chip={x:cx-cw/2, y:cy-ch/2, w:cw, h:ch, cx, cy};
-    this.traces=[]; this.pulses=[];
-    const perSide=Math.max(5, Math.round(cw/42));
-    const reach=Math.max(W,H);
-    const mk=(sx,sy,dx,dy)=>{
-      // right-angle PCB run: out, turn, out, turn
-      const pts=[[sx,sy]];
-      let x=sx,y=sy, len=rand(60,120);
-      x+=dx*len; y+=dy*len; pts.push([x,y]);
-      let turn=Math.random()<0.5?1:-1, steps=2+((Math.random()*3)|0);
-      for(let i=0;i<steps;i++){
-        const l=rand(50,180);
-        if(dx){ y+=turn*l; } else { x+=turn*l; }
-        pts.push([x,y]);
-        const l2=rand(70,220);
-        if(dx){ x+=dx*l2; } else { y+=dy*l2; }
-        pts.push([x,y]);
-        turn*=-1;
-        if(Math.abs(x-cx)>reach||Math.abs(y-cy)>reach) break;
-      }
-      // run it off the edge
-      if(dx) x+=dx*reach; else y+=dy*reach;
-      pts.push([x,y]);
-      const p=poly(pts);
-      p.width = Math.random()<0.22 ? 2.2 : 1.1;
-      p.pads = [];
-      for(let i=1;i<pts.length-1;i++) if(Math.random()<0.5) p.pads.push(pts[i]);
-      this.traces.push(p);
-    };
-    for(let i=0;i<perSide;i++){
-      const fy=(i+1)/(perSide+1);
-      mk(this.chip.x, this.chip.y+ch*fy, -1, 0);
-      mk(this.chip.x+cw, this.chip.y+ch*fy, 1, 0);
-    }
-    const perTop=Math.max(4, Math.round(ch/26));
-    for(let i=0;i<perTop;i++){
-      const fx=(i+1)/(perTop+1);
-      mk(this.chip.x+cw*fx, this.chip.y, 0, -1);
-      mk(this.chip.x+cw*fx, this.chip.y+ch, 0, 1);
-    }
-  },
-  spawn(){
-    const inward = S.state==="listening";
-    const t=pick(this.traces);
-    this.pulses.push({ t, d: inward? t.total : 0, dir: inward?-1:1,
-                       v: rand(260,620)*(0.5+S.energy), life:1 });
-  },
-  draw(dt){
-    const {chip}=this, glow=S.energy;
-    // traces
-    ctx.lineCap="round"; ctx.lineJoin="round";
-    for(const t of this.traces){
-      ctx.beginPath();
-      ctx.moveTo(t.pts[0][0],t.pts[0][1]);
-      for(let i=1;i<t.pts.length;i++) ctx.lineTo(t.pts[i][0],t.pts[i][1]);
-      ctx.strokeStyle=rgba(S.colour,0.10+0.12*glow);
-      ctx.lineWidth=t.width; ctx.stroke();
-      for(const p of t.pads){
-        ctx.beginPath(); ctx.arc(p[0],p[1],t.width+1.1,0,7);
-        ctx.fillStyle=rgba(S.colour,0.16+0.2*glow); ctx.fill();
-      }
-    }
-    // pulses
-    const rate = 2 + S.energy*46;
-    if(Math.random() < rate*dt) this.spawn();
-    ctx.globalCompositeOperation="lighter";
-    for(let i=this.pulses.length-1;i>=0;i--){
-      const p=this.pulses[i];
-      p.d += p.dir*p.v*dt;
-      if(p.d<-20||p.d>p.t.total+20){ this.pulses.splice(i,1); continue; }
-      for(let k=0;k<7;k++){
-        const [x,y]=p.t.at(p.d - p.dir*k*7);
-        const a=(1-k/7)*0.85;
-        ctx.beginPath(); ctx.arc(x,y, 2.6-k*0.28, 0, 7);
-        ctx.fillStyle=rgba(S.accent, a*0.5); ctx.fill();
-      }
-      const [hx,hy]=p.t.at(p.d);
-      ctx.beginPath(); ctx.arc(hx,hy, 3.4, 0, 7);
-      ctx.fillStyle=rgba("#ffffff",0.55); ctx.fill();
-    }
-    ctx.globalCompositeOperation="source-over";
-    // chip body
-    const r=10;
-    ctx.beginPath();
-    ctx.roundRect(chip.x,chip.y,chip.w,chip.h,r);
-    const g=ctx.createLinearGradient(chip.x,chip.y,chip.x,chip.y+chip.h);
-    g.addColorStop(0,"#0b1216"); g.addColorStop(1,"#060a0d");
-    ctx.fillStyle=g; ctx.fill();
-    ctx.shadowBlur=40+90*glow; ctx.shadowColor=rgba(S.accent,0.55);
-    ctx.strokeStyle=rgba(S.accent,0.5+0.45*glow); ctx.lineWidth=1.6; ctx.stroke();
-    ctx.shadowBlur=0;
-    // breathing inner ring
-    const br=0.5+0.5*Math.sin(S.t*(1.1+S.energy*5));
-    ctx.beginPath();
-    ctx.roundRect(chip.x+9,chip.y+9,chip.w-18,chip.h-18,r-4);
-    ctx.strokeStyle=rgba(S.accent,0.10+0.30*glow*br); ctx.lineWidth=1; ctx.stroke();
-    // name
-    const fs=Math.round(chip.h*0.30);
-    ctx.font=`600 ${fs}px "SF Mono",ui-monospace,Menlo,monospace`;
-    ctx.textAlign="center"; ctx.textBaseline="middle";
-    ctx.shadowBlur=22+40*glow; ctx.shadowColor=rgba(S.accent,0.8);
-    ctx.fillStyle=mix("#dff3f6",S.accent,0.35);
-    ctx.fillText(S.name.toUpperCase(), chip.cx, chip.cy-fs*0.12);
-    ctx.shadowBlur=0;
-    ctx.font=`500 ${Math.round(fs*0.30)}px "SF Mono",ui-monospace,Menlo,monospace`;
-    ctx.fillStyle=rgba(S.colour,0.75);
-    ctx.fillText("· "+STATES[S.state].label.toUpperCase()+" ·", chip.cx, chip.cy+fs*0.62);
-  }
-};
-
-/* ================= FACE 3: RADIAL — concentric bloom ================== */
-const radial={
-  bars:96, hist:[],
-  build(){ this.hist=new Array(this.bars).fill(0); },
-  draw(dt){
-    const cx=W/2, cy=H/2, R=Math.min(W,H)*0.17;
-    for(let i=0;i<this.bars;i++){
-      const n=Math.sin(S.t*2.2+i*0.34)*0.5+Math.sin(S.t*5.7+i*0.11)*0.5;
-      const target=Math.abs(n)*S.energy*R*1.9 + R*0.06;
-      this.hist[i]+=(target-this.hist[i])*Math.min(1,dt*9);
-    }
-    ctx.globalCompositeOperation="lighter";
-    for(let i=0;i<this.bars;i++){
-      const a=(i/this.bars)*Math.PI*2 - Math.PI/2;
-      const l=this.hist[i];
-      const x1=cx+Math.cos(a)*R, y1=cy+Math.sin(a)*R;
-      const x2=cx+Math.cos(a)*(R+l), y2=cy+Math.sin(a)*(R+l);
-      ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2);
-      ctx.strokeStyle=rgba(S.accent,0.20+0.5*(l/(R*1.6)));
-      ctx.lineWidth=2.4; ctx.lineCap="round"; ctx.stroke();
-    }
-    ctx.globalCompositeOperation="source-over";
-    for(let k=0;k<3;k++){
-      const rr=R*(0.62+k*0.16)+Math.sin(S.t*1.4+k)*3*S.energy;
-      ctx.beginPath(); ctx.arc(cx,cy,rr,0,7);
-      ctx.strokeStyle=rgba(S.colour,0.10+0.16*S.energy); ctx.lineWidth=1; ctx.stroke();
-    }
-    ctx.beginPath(); ctx.arc(cx,cy,R*0.55,0,7);
-    ctx.fillStyle="#060a0d"; ctx.fill();
-    ctx.shadowBlur=30+70*S.energy; ctx.shadowColor=rgba(S.accent,0.6);
-    ctx.strokeStyle=rgba(S.accent,0.7); ctx.lineWidth=1.4; ctx.stroke();
-    ctx.shadowBlur=0;
-    const fs=Math.round(R*0.30);
-    ctx.font=`600 ${fs}px "SF Mono",ui-monospace,Menlo,monospace`;
-    ctx.textAlign="center"; ctx.textBaseline="middle";
-    ctx.fillStyle=mix("#dff3f6",S.accent,0.3);
-    ctx.fillText(S.name.toUpperCase(),cx,cy);
-  }
-};
-
-/* ================= FACE 4: RAIN — falling code ======================== */
-const rain={
-  cols:[], size:16, glyphs:"01アイウエオカキクケコサシスセソナニヌネノ<>{}[]/\\=+*#",
-  build(){
-    this.size=Math.max(13,Math.round(Math.min(W,H)/58));
-    const n=Math.ceil(W/this.size);
-    this.cols=Array.from({length:n},()=>({y:rand(-H,0),v:rand(60,240),
-      trail:6+((Math.random()*16)|0)}));
-  },
-  draw(dt){
-    ctx.font=`${this.size}px "SF Mono",ui-monospace,Menlo,monospace`;
-    ctx.textAlign="center"; ctx.textBaseline="top";
-    for(let i=0;i<this.cols.length;i++){
-      const c=this.cols[i];
-      c.y+=c.v*dt*(0.35+S.energy*1.9);
-      if(c.y>H+c.trail*this.size){ c.y=rand(-H*0.6,0); c.v=rand(60,240); }
-      const x=i*this.size+this.size/2;
-      for(let k=0;k<c.trail;k++){
-        const y=c.y-k*this.size;
-        if(y<-this.size||y>H) continue;
-        const a=(1-k/c.trail)*(0.25+0.7*S.energy);
-        ctx.fillStyle = k===0 ? rgba("#ffffff",Math.min(1,a+0.35)) : rgba(S.accent,a);
-        ctx.fillText(this.glyphs[(Math.random()*this.glyphs.length)|0],x,y);
-      }
-    }
-    const fs=Math.round(Math.min(W,H)*0.10);
-    ctx.font=`600 ${fs}px "SF Mono",ui-monospace,Menlo,monospace`;
-    ctx.textAlign="center"; ctx.textBaseline="middle";
-    ctx.shadowBlur=30+60*S.energy; ctx.shadowColor=rgba(S.accent,0.9);
-    ctx.fillStyle=rgba("#e8f7fa",0.92);
-    ctx.fillText(S.name.toUpperCase(),W/2,H/2);
-    ctx.shadowBlur=0;
-  }
-};
-
-/* ================= FACE 5: NEURAL — signal mesh ======================= */
-const neural={
-  nodes:[], edges:[], sparks:[],
-  build(){
-    const n=Math.round(Math.min(90,(W*H)/16000));
-    this.nodes=Array.from({length:n},()=>({x:rand(0,W),y:rand(0,H),
-      vx:rand(-14,14),vy:rand(-14,14),r:rand(1.4,3.2)}));
-    this.edges=[]; this.sparks=[];
-  },
-  draw(dt){
-    const N=this.nodes, cx=W/2, cy=H/2;
-    for(const p of N){
-      p.x+=p.vx*dt*(0.4+S.energy*2.4); p.y+=p.vy*dt*(0.4+S.energy*2.4);
-      if(p.x<0||p.x>W) p.vx*=-1; if(p.y<0||p.y>H) p.vy*=-1;
-      p.x=Math.max(0,Math.min(W,p.x)); p.y=Math.max(0,Math.min(H,p.y));
-    }
-    const R=Math.min(W,H)*0.17; this.edges.length=0;
-    for(let i=0;i<N.length;i++)for(let j=i+1;j<N.length;j++){
-      const d=Math.hypot(N[i].x-N[j].x,N[i].y-N[j].y);
-      if(d<R){ this.edges.push([i,j,1-d/R]);
-        ctx.beginPath(); ctx.moveTo(N[i].x,N[i].y); ctx.lineTo(N[j].x,N[j].y);
-        ctx.strokeStyle=rgba(S.colour,(1-d/R)*(0.07+0.22*S.energy));
-        ctx.lineWidth=1; ctx.stroke();
-      }
-    }
-    if(this.edges.length && Math.random()<(2+S.energy*40)*dt){
-      const e=pick(this.edges); this.sparks.push({e,k:0,v:rand(1.2,3.4)});
-    }
-    ctx.globalCompositeOperation="lighter";
-    for(let i=this.sparks.length-1;i>=0;i--){
-      const s=this.sparks[i]; s.k+=s.v*dt;
-      if(s.k>1){ this.sparks.splice(i,1); continue; }
-      const a=N[s.e[0]], b=N[s.e[1]];
-      const x=a.x+(b.x-a.x)*s.k, y=a.y+(b.y-a.y)*s.k;
-      ctx.beginPath(); ctx.arc(x,y,2.6,0,7);
-      ctx.fillStyle=rgba(S.accent,0.8); ctx.fill();
-    }
-    for(const p of N){
-      ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,7);
-      ctx.fillStyle=rgba(S.accent,0.25+0.5*S.energy); ctx.fill();
-    }
-    ctx.globalCompositeOperation="source-over";
-    const fs=Math.round(Math.min(W,H)*0.085);
-    ctx.font=`600 ${fs}px "SF Mono",ui-monospace,Menlo,monospace`;
-    ctx.textAlign="center"; ctx.textBaseline="middle";
-    ctx.shadowBlur=26+60*S.energy; ctx.shadowColor=rgba(S.accent,0.75);
-    ctx.fillStyle=mix("#dff3f6",S.accent,0.25);
-    ctx.fillText(S.name.toUpperCase(),cx,cy);
-    ctx.shadowBlur=0;
-  }
-};
-
-const faces={pixel};
 
 /* ---------- loop ---------- */
 let last=performance.now();
@@ -801,6 +606,9 @@ async function poll(){
     const d=await r.json();
     S.state = STATES[d.state] ? d.state : "idle";
     S.level = Math.max(0,Math.min(1, d.level||0));
+    S.mouth = ["closed","consonant","ah","ee","oh"].includes(d.mouth) ? d.mouth : "closed";
+    const nextExpression=["neutral","bright","amused","curious","surprised","tired"].includes(d.expression) ? d.expression : "neutral";
+    S.expression=nextExpression;
     if(d.text!==S.text){
       S.text=d.text||"";
       showCaption(S.text);
@@ -830,8 +638,8 @@ function fitCast(){
    right-hand end — so the last shortcut was always half a letter. The hint is
    the least important of the three, so it is the one that gets shorter. */
 const HINT_FORMS = [
-  "F · FULL  ·  B · OVERLAY  ·  H · HANDS  ·  S · SETTINGS",
-  "F · B · H · S",
+  "1-5 · FACES  ·  F · FULL  ·  B · OVERLAY  ·  H · HANDS  ·  S · SETTINGS",
+  "1-5 FACES · F · B · H · S",
   "",
 ];
 function hudOverflows(hud){
@@ -925,10 +733,15 @@ const $cfgAgent = document.getElementById("cfg_agent");
 const $cfgListen = document.getElementById("cfg_listen");
 const $cfgSpeak = document.getElementById("cfg_speak");
 const $cfgFace = document.getElementById("cfg_face");
+const $cfgGeminiKey = document.getElementById("cfg_gemini_key");
+const $cfgKeyEye = document.getElementById("cfg_key_eye");
+const $cfgKeyStatus = document.getElementById("cfg_key_status");
+const $cfgKeyRemove = document.getElementById("cfg_key_remove");
 const $cfgSave = document.getElementById("cfg_save");
 const $cfgClose = document.getElementById("cfg_close");
 
 let isModalOpen = false;
+let removeGeminiKey = false;
 
 async function loadSettings(){
   const d = await (await fetch("/settings", {cache: "no-store"})).json();
@@ -936,6 +749,22 @@ async function loadSettings(){
   $cfgAgent.value = d.agent || "Lugalay";
   $cfgListen.value = d.listen_language || "my";
   $cfgSpeak.value = d.speak_language || "my";
+  $cfgGeminiKey.value = "";
+  $cfgGeminiKey.type = "password";
+  removeGeminiKey = false;
+  if(d.gemini_key_saved){
+    $cfgGeminiKey.placeholder = "Saved locally ••••••••";
+    $cfgKeyStatus.textContent = "✓ Gemini TTS enabled";
+    $cfgKeyRemove.hidden = false;
+  }else if(d.gemini_key_from_environment){
+    $cfgGeminiKey.placeholder = "Using environment key";
+    $cfgKeyStatus.textContent = "✓ Gemini TTS enabled by environment";
+    $cfgKeyRemove.hidden = true;
+  }else{
+    $cfgGeminiKey.placeholder = "Paste a Gemini API key";
+    $cfgKeyStatus.textContent = "Edge-TTS fallback active";
+    $cfgKeyRemove.hidden = true;
+  }
   $cfgFace.innerHTML = "";
   (d.faces||[]).forEach((f,i)=>{
     const opt = document.createElement("option");
@@ -956,10 +785,36 @@ async function openSettings(){
 function closeSettings(){
   $sModal.classList.remove("open");
   isModalOpen = false;
+  if(document.activeElement && typeof document.activeElement.blur === "function"){
+    document.activeElement.blur();
+  }
+  window.focus();
 }
 
 $sBtn.onclick = openSettings;
 $cfgClose.onclick = closeSettings;
+$cfgKeyEye.onclick = () => {
+  const show = $cfgGeminiKey.type === "password";
+  $cfgGeminiKey.type = show ? "text" : "password";
+  $cfgKeyEye.setAttribute("aria-label", show ? "Hide API key" : "Show API key");
+};
+$cfgGeminiKey.addEventListener("input", () => {
+  if($cfgGeminiKey.value){
+    removeGeminiKey = false;
+    $cfgKeyStatus.textContent = "New key will be saved";
+    $cfgKeyRemove.hidden = true;
+  }
+});
+$cfgKeyRemove.onclick = () => {
+  removeGeminiKey = true;
+  $cfgGeminiKey.value = "";
+  $cfgKeyStatus.textContent = "Key will be removed when saved";
+  $cfgKeyRemove.hidden = true;
+};
+$sModal.addEventListener("click", e => {
+  if (e.target === $sModal) closeSettings();
+});
+
 const $cfgHandsBtn = document.getElementById("cfg_hands_btn");
 if($cfgHandsBtn) $cfgHandsBtn.onclick = () => fetch("/open-hands");
 
@@ -974,6 +829,9 @@ $cfgSave.onclick = async () => {
       speak_language: $cfgSpeak.value,
       face: $cfgFace.value
     };
+    const geminiKey = $cfgGeminiKey.value.trim();
+    if(geminiKey) payload.gemini_api_key = geminiKey;
+    if(removeGeminiKey) payload.clear_gemini_api_key = true;
     const r = await fetch("/settings", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
@@ -986,7 +844,10 @@ $cfgSave.onclick = async () => {
       if(idx >= 0) selectFace(idx);
       await loadSettings();
       $cfgSave.textContent = "Saved ✓";
-      setTimeout(() => $cfgSave.textContent = "Save Changes", 1400);
+      setTimeout(() => {
+        $cfgSave.textContent = "Save Changes";
+        closeSettings();
+      }, 600);
     } else {
       alert("Save failed: " + await r.text());
     }
@@ -1000,7 +861,13 @@ $cfgSave.onclick = async () => {
 
 addEventListener("keydown",e=>{
   if(isModalOpen){
-    if(e.key==="Escape") closeSettings();
+    if(e.key==="Escape"){
+      e.preventDefault();
+      closeSettings();
+    }
+    return;
+  }
+  if(e.target && (e.target.tagName==="INPUT" || e.target.tagName==="SELECT" || e.target.tagName==="TEXTAREA")){
     return;
   }
   const n=Number(e.key);
@@ -1020,6 +887,7 @@ addEventListener("mousemove",()=>{
 /* ---------- boot ---------- */
 (async()=>{
   try{
+    localStorage.removeItem("lugalay_viz");
     const c=await (await fetch("/config")).json();
     S.name=c.name||"Agent";
     S.personas=c.faces||[];

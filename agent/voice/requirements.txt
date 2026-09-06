@@ -7,6 +7,7 @@ pynput>=1.7.7
 edge-tts>=7.0.0
 SpeechRecognition>=3.10.0
 pywebview>=5.0
+
 # headless: Lugalay only captures frames, never shows a window. The GUI
 # build drags in libGL/GTK, which Linux runners and slim containers lack.
 opencv-python-headless>=4.9

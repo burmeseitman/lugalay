@@ -308,11 +308,14 @@ check("remote path speaks the tool loop too", "_remote_tool_round" in _vsrc)
 check("presets available for common providers",
       all(n in _vsrc for n in ("openai", "groq", "together", "openrouter", "deepseek")))
 _dcfg = json.load(open(os.path.join(AGENT, "config.default.json"), encoding="utf-8"))
-# ── Burmese TTS: Microsoft Edge-TTS with Emotion & Prosody pipeline
+# ── Burmese TTS: Gemini performance first, clean Microsoft Edge fallback
 check("burmese edge-tts implemented",
       "_synth_burmese_edge_bytes" in _vsrc and "edge_tts" in _vsrc)
-check("burmese emotional prosody pipeline wired",
-      "_synth_burmese_emotional" in _vsrc and "ProsodyInjector" in _vsrc)
+check("gemini Burmese TTS primary is wired",
+      "_synth_burmese_gemini" in _vsrc
+      and "gemini-2.5-flash-preview-tts" in _vsrc)
+check("edge fallback strips reaction tags",
+      "edge_text = clean_spoken_text(tagged, keep_sfx_tags=False)" in _vsrc)
 
 check("brain.remote in the shipped default", "remote" in _dcfg.get("brain", {}))
 
