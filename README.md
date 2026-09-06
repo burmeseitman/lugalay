@@ -6,24 +6,24 @@
 
 A personal AI desktop companion for macOS: a **mind**, a **mouth**, a **face**, a pair of **hands**, and a set of **eyes**. It listens in Burmese and English, answers with natural colloquial spoken rhythm, and watches you from an animated pixel avatar. 
 
-```
-you speak ──▶ Faster-Whisper / Google STT (my-MM / en-US)
-                         │
-                         ▼
-        Brain: OpenAI Codex Plus / Claude / Ollama
-                         │
-                         ▼
-        Diglossia Normalizer & Phonetic Transliteration
-                         │
-                         ├─▶ English ─▶ Kokoro-82M ONNX (Local)
-                         └─▶ Burmese ─▶ Gemini 2.5 Flash TTS (Primary)
-                                      └─▶ Microsoft Edge-TTS (Free Fallback)
-                                                    │
-                                                    ▼
-                                          agent/bus/state.json
-                                                    │
-                                                    ▼
-                                       Animated Face & Settings UI
+```mermaid
+flowchart TD
+    User([🎙️ You Speak]) --> STT[Faster-Whisper / Google STT]
+    
+    STT --> Brain[🧠 Brain: OpenAI Codex Plus / Claude / Ollama]
+    Brain --> Normalizer[📝 Diglossia Normalizer & Transliteration]
+    
+    Normalizer -->|English| Kokoro[🇺🇸 Kokoro-82M ONNX Local TTS]
+    Normalizer -->|Burmese| BurmeseTTS{TTS Provider}
+    
+    BurmeseTTS -->|Primary| Gemini[✨ Gemini 2.5 Flash Expressive TTS]
+    BurmeseTTS -->|Free Fallback| Edge[⚡ Microsoft Edge-TTS]
+    
+    Kokoro --> Bus[(agent/bus/state.json)]
+    Gemini --> Bus
+    Edge --> Bus
+    
+    Bus --> UI[🎭 Animated Face & Settings UI]
 ```
 
 ---
