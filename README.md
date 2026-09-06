@@ -28,6 +28,19 @@ flowchart TD
 
 ---
 
+## 🛠️ Tech Stack
+
+| Domain | Technologies & Frameworks |
+|---|---|
+| **Core & Desktop Engine** | ![Python](https://img.shields.io/badge/Python_3.12-3776AB?style=flat-square&logo=python&logoColor=white) ![PyWebView](https://img.shields.io/badge/PyWebView-1B1F23?style=flat-square) ![macOS](https://img.shields.io/badge/macOS-000000?style=flat-square&logo=apple&logoColor=white) ![NumPy](https://img.shields.io/badge/NumPy-013243?style=flat-square&logo=numpy&logoColor=white) |
+| **Brain & Reasoning LLMs** | ![OpenAI Codex](https://img.shields.io/badge/OpenAI_Codex_Plus_/_GPT--4o-412991?style=flat-square&logo=openai&logoColor=white) ![Claude](https://img.shields.io/badge/Anthropic_Claude-D97706?style=flat-square&logo=anthropic&logoColor=white) ![Gemini](https://img.shields.io/badge/Google_Gemini-8E75C2?style=flat-square&logo=google&logoColor=white) ![Ollama](https://img.shields.io/badge/Ollama_(Qwen/LLaMA)-000000?style=flat-square&logo=ollama&logoColor=white) |
+| **Speech-to-Text (STT)** | ![Faster-Whisper](https://img.shields.io/badge/Faster--Whisper_(Local_int8)-000000?style=flat-square&logo=openai&logoColor=white) ![Google Speech](https://img.shields.io/badge/Google_Speech_STT-4285F4?style=flat-square&logo=google&logoColor=white) |
+| **Text-to-Speech (TTS)** | ![Gemini TTS](https://img.shields.io/badge/Gemini_2.5_Flash_TTS-8E75C2?style=flat-square&logo=google&logoColor=white) ![Microsoft Edge-TTS](https://img.shields.io/badge/Microsoft_Edge--TTS-0078D7?style=flat-square&logo=microsoft&logoColor=white) ![Kokoro ONNX](https://img.shields.io/badge/Kokoro--82M_ONNX-005CED?style=flat-square&logo=onnx&logoColor=white) |
+| **Vision & Gestures** | ![MediaPipe](https://img.shields.io/badge/Google_MediaPipe_WASM-0078D4?style=flat-square&logo=google&logoColor=white) ![OpenCV](https://img.shields.io/badge/OpenCV-5C3EE8?style=flat-square&logo=opencv&logoColor=white) |
+| **Build & Distribution** | ![PyInstaller](https://img.shields.io/badge/PyInstaller-FFE873?style=flat-square&logo=python&logoColor=black) ![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-2088FF?style=flat-square&logo=github-actions&logoColor=white) |
+
+---
+
 ## 🚀 Quick Start
 
 Double-click **`Lugalay.app`** in `/Applications`, or run:
