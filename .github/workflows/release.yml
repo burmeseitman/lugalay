@@ -21,15 +21,19 @@ jobs:
       matrix:
         include:
           - os: macos-latest
+            arch: arm64
             label: macOS (Apple Silicon)
             artifact: Lugalay-macos-arm64
-          - os: macos-13
+          - os: macos-latest
+            arch: x64
             label: macOS (Intel)
             artifact: Lugalay-macos-x86_64
           - os: windows-latest
+            arch: x64
             label: Windows
             artifact: Lugalay-windows-x86_64
           - os: ubuntu-22.04
+            arch: x64
             label: Linux
             artifact: Lugalay-linux-x86_64
 
@@ -39,6 +43,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"      # audio wheels lag the newest CPython
+          architecture: ${{ matrix.arch }}
 
       # ---- system libraries the audio and webview stacks need ----
       - name: Linux system packages
