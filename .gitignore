@@ -37,3 +37,21 @@ packaging/*.iconset/
 
 # generated at runtime
 agent/eyes/frames/
+
+# ── secrets and credentials — never commit these ──
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+credentials.json
+tokens.json
+
+# ── local tool config ──
+.claude/
+.venv/
+venv/
+env/

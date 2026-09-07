@@ -45,6 +45,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Content-Security-Policy",
+                         "default-src 'self' 'unsafe-inline' blob: data:;")
         self.end_headers()
         self.wfile.write(body)
 
@@ -65,8 +69,10 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/vendor/"):
             rel = os.path.normpath(path[len("/vendor/"):]).lstrip("./")
             full = os.path.join(HERE, "vendor", rel)
-            # never serve outside vendor/
-            if not os.path.abspath(full).startswith(os.path.join(HERE, "vendor")):
+            # never serve outside vendor/ — the trailing os.sep prevents
+            # sibling directories named vendor_xxx from matching.
+            vendor_dir = os.path.join(HERE, "vendor") + os.sep
+            if not os.path.abspath(full).startswith(vendor_dir):
                 return self._send(403, json.dumps({"error": "forbidden"}))
             if os.path.isfile(full):
                 ctype = mimetypes.guess_type(full)[0] or "application/octet-stream"

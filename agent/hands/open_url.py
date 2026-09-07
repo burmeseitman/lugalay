@@ -14,7 +14,7 @@ Only http and https are accepted. file://, javascript: and shell metacharacters
 never reach a command line, because no shell is involved: the URL is passed as
 a single argument.
 """
-import re, subprocess, sys, urllib.parse
+import os, re, subprocess, sys, urllib.parse
 
 ALLOWED = ("http", "https")
 # a hostname and nothing else: letters, digits, dots, hyphens, optional :port.
@@ -47,9 +47,10 @@ def open_url(url):
     if sys.platform == "darwin":
         cmd = ["open", url]
     elif sys.platform == "win32":
-        # the empty string is start's window-title argument; without it a
-        # quoted URL is taken as the title and nothing opens
-        cmd = ["cmd", "/c", "start", "", url]
+        # os.startfile uses ShellExecuteW directly — no cmd.exe shell parsing,
+        # so URL metacharacters (&, |, ", %) cannot break out into commands.
+        os.startfile(url)  # noqa: S606 — validated by normalise() above
+        return
     else:
         cmd = ["xdg-open", url]
     # no shell=True: the URL stays one argument and is never parsed as a command

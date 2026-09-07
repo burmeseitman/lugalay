@@ -12,6 +12,7 @@ markdown files are rendered from agent/templates/ so they stay in step.
 """
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -25,6 +26,19 @@ import bus  # noqa: E402
 # installed Lugalay came up with no personality and no memory at all.
 HOME = bus.HOME
 TEMPLATES = bus.resource("templates")
+
+# Maximum length for user/agent names to prevent abuse via /setup.
+_NAME_MAX = 40
+# Allow letters (any script), digits, spaces, hyphens, apostrophes, and dots.
+# Strip everything else — especially newlines, braces, and control characters
+# that could corrupt CLAUDE.md or .claude/settings.json templates.
+_NAME_RE = re.compile(r"[^\w\s\-'.]+", re.UNICODE)
+
+
+def _sanitize_name(raw):
+    """Clean a user or agent name for safe template interpolation."""
+    cleaned = _NAME_RE.sub("", raw).strip()
+    return cleaned[:_NAME_MAX] or "friend"
 
 
 def set_gemini_api_key(cfg, value=None, clear=False):
@@ -122,8 +136,8 @@ def render(user, agent="Lugalay", agent_my="လူကလေး"):
 def apply(answers):
     """answers: {user, agent, listen_language, speak_language, language, face}. Returns a summary dict."""
     cfg = bus.config()
-    user = (answers.get("user") or "").strip() or detect_name() or "friend"
-    agent = (answers.get("agent") or cfg.get("name") or "Lugalay").strip()
+    user = _sanitize_name((answers.get("user") or "").strip() or detect_name() or "friend")
+    agent = _sanitize_name((answers.get("agent") or cfg.get("name") or "Lugalay").strip())
     listen_lang = answers.get("listen_language") or "my"
     speak_lang = answers.get("speak_language") or answers.get("language") or "my"
     face = answers.get("face") or cfg.get("face")

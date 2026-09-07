@@ -92,8 +92,12 @@ def local_request(headers, port):
         return False
 
     # 3. And if it named an origin, that origin has to be this very server.
+    #    Origin: null (from sandboxed iframes, data: URIs, etc.) is explicitly
+    #    rejected — it can be sent by a cross-site attacker's sandbox.
     origin = (headers.get("Origin") or "").strip()
-    if origin and origin.lower() != "null":
+    if origin:
+        if origin.lower() == "null":
+            return False
         try:
             u = urllib.parse.urlsplit(origin)
         except ValueError:
@@ -143,7 +147,10 @@ def config():
         ensure_home()
         with open(DEFAULT_CONFIG, encoding="utf-8") as f:
             seed = f.read()
-        with open(CONFIG, "w", encoding="utf-8") as f:
+        # Create with owner-only permissions (0o600) to protect any secrets
+        # that will be written later (API keys, etc.).
+        fd = os.open(CONFIG, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(seed)
     with open(CONFIG, encoding="utf-8") as f:
         return json.load(f)

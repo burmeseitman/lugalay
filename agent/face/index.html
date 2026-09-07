@@ -816,7 +816,7 @@ $sModal.addEventListener("click", e => {
 });
 
 const $cfgHandsBtn = document.getElementById("cfg_hands_btn");
-if($cfgHandsBtn) $cfgHandsBtn.onclick = () => fetch("/open-hands");
+if($cfgHandsBtn) $cfgHandsBtn.onclick = () => fetch("/open-hands", {method:"POST"});
 
 $cfgSave.onclick = async () => {
   $cfgSave.disabled = true;
@@ -875,7 +875,7 @@ addEventListener("keydown",e=>{
   if(e.key==="f"||e.key==="F"){ toggleFullscreen(); }
   if(e.key==="b"||e.key==="B"){ toggleOverlay(); }
   if(e.key==="s"||e.key==="S"){ openSettings(); }
-  if(e.key==="h"||e.key==="H"){ fetch("/open-hands"); }
+  if(e.key==="h"||e.key==="H"){ fetch("/open-hands", {method:"POST"}); }
 });
 addEventListener("mousemove",()=>{
   if(isModalOpen) return;

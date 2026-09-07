@@ -1337,7 +1337,7 @@ class Transcriber:
             sf.write(flac_buf, audio_float, 16000, format="FLAC", subtype="PCM_16")
             flac_data = flac_buf.getvalue()
 
-            key = self.cfg.get("google_api_key") or os.environ.get("GOOGLE_SPEECH_API_KEY", "AIzaSyBOti4mM-6x9WDnZIjIeyEU21OpBXqWBgw")
+            key = self.cfg.get("google_api_key") or os.environ.get("GOOGLE_SPEECH_API_KEY", "")
             params = urllib.parse.urlencode({
                 "client": "chromium",
                 "lang": lang,
@@ -2241,16 +2241,17 @@ class Mouth:
                     voice = "Samantha" if age < 35 else "Karen"
                 else:
                     voice = "Alex" if age < 55 else "Daniel"
-                subprocess.run(["say", "-v", voice, text], check=False)
+                subprocess.run(["say", "-v", voice, "--", text], check=False)
             elif sys.platform == "win32":
                 hint = "Female" if gender == "female" else "Male"
                 ps = ("Add-Type -AssemblyName System.Speech; "
                       "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
                       f"$s.SelectVoiceByHints('{hint}'); "
-                      f"$s.Speak(@'\n{text}\n'@)")
-                subprocess.run(["powershell", "-NoProfile", "-Command", ps], check=False)
+                      "$s.Speak([Console]::In.ReadToEnd())")
+                subprocess.run(["powershell", "-NoProfile", "-Command", ps],
+                               input=text, text=True, check=False)
             else:
-                subprocess.run(["espeak-ng", "-v", "en+f3" if gender == "female" else "en+m3", text], check=False)
+                subprocess.run(["espeak-ng", "-v", "en+f3" if gender == "female" else "en+m3", "--", text], check=False)
         except (OSError, subprocess.SubprocessError) as e:
             log("tts", f"{C['am']}no fallback voice available ({e}){C['x']}", "am")
 

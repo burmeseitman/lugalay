@@ -21,6 +21,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Content-Security-Policy",
+                         "default-src 'self' 'unsafe-inline' blob: data:;")
         self.end_headers()
         self.wfile.write(body)
 
@@ -57,10 +61,7 @@ class Handler(BaseHTTPRequestHandler):
                     os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")),
             }))
         if path == "/open-hands":
-            import webbrowser
-            hands_port = int(bus.config().get("hands_port", 7318))
-            webbrowser.open(f"http://127.0.0.1:{hands_port}/")
-            return self._send(200, json.dumps({"ok": True}))
+            return self._send(405, json.dumps({"error": "use POST"}))
         if path == "/setup-defaults":
             import setup as setup_mod
             return self._send(200, json.dumps({
@@ -80,6 +81,11 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0]
         if not bus.local_request(self.headers, PORT):
             return self._send(403, json.dumps({"error": "cross-site request refused"}))
+        if path == "/open-hands":
+            import webbrowser
+            hands_port = int(bus.config().get("hands_port", 7318))
+            webbrowser.open(f"http://127.0.0.1:{hands_port}/")
+            return self._send(200, json.dumps({"ok": True}))
         if path == "/setup":
             import setup as setup_mod
             n = min(int(self.headers.get("Content-Length", 0) or 0), 64 * 1024)

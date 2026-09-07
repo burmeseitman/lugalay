@@ -7,7 +7,7 @@ started underneath and torn down when the window closes.
 
 Everything that used to scroll past in Terminal goes to agent/logs/app.log.
 """
-import atexit, json, multiprocessing, os, signal, socket, subprocess, sys, threading, time
+import atexit, json, multiprocessing, os, signal, socket, subprocess, sys, threading, time, urllib.request
 multiprocessing.freeze_support()
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -132,7 +132,21 @@ def main():
                 break
             time.sleep(0.1)
     else:
-        print(f"[app] face already on :{face_port}, reusing")
+        # Verify the existing listener is ours before trusting it.
+        # An untrusted process squatting on the port would gain full
+        # access to the native pywebview JS bridge (quit, set_on_top, etc.).
+        try:
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{face_port}/config", method="GET")
+            with urllib.request.urlopen(req, timeout=2) as r:
+                data = json.loads(r.read())
+            if data.get("name") != CFG.get("name", "Lugalay"):
+                raise ValueError("port owner mismatch")
+            print(f"[app] face already on :{face_port}, verified and reusing")
+        except Exception:
+            print(f"[app] :{face_port} is occupied by an unknown process, "
+                  f"refusing to connect — please free the port and restart")
+            sys.exit(1)
 
     hands_port = int(CFG.get("hands_port", 7318))
     if not port_open(hands_port):
