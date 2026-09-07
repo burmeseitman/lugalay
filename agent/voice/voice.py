@@ -2249,7 +2249,8 @@ class Mouth:
                       f"$s.SelectVoiceByHints('{hint}'); "
                       "$s.Speak([Console]::In.ReadToEnd())")
                 subprocess.run(["powershell", "-NoProfile", "-Command", ps],
-                               input=text, text=True, check=False)
+                               input=text, text=True, encoding="utf-8",
+                               check=False)
             else:
                 subprocess.run(["espeak-ng", "-v", "en+f3" if gender == "female" else "en+m3", "--", text], check=False)
         except (OSError, subprocess.SubprocessError) as e:
