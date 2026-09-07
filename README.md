@@ -4,7 +4,7 @@
 
 # Lugalay
 
-A personal AI desktop companion for macOS: a **mind**, a **mouth**, a **face**, a pair of **hands**, and a set of **eyes**. It listens in Burmese and English, answers with natural colloquial spoken rhythm, and watches you from an animated pixel avatar. 
+A personal AI desktop companion for macOS, Windows, and Linux: a **mind**, a **mouth**, a **face**, a pair of **hands**, and a set of **eyes**. It listens in Burmese and English, answers with natural colloquial spoken rhythm, and watches you from an animated pixel avatar. 
 
 ```mermaid
 flowchart TB
@@ -52,7 +52,7 @@ flowchart TB
 
 | Domain | Technologies & Frameworks |
 |---|---|
-| **Core & Desktop Engine** | ![Python](https://img.shields.io/badge/Python_3.12-3776AB?style=flat-square&logo=python&logoColor=white) ![PyWebView](https://img.shields.io/badge/PyWebView-1B1F23?style=flat-square) ![macOS](https://img.shields.io/badge/macOS-000000?style=flat-square&logo=apple&logoColor=white) ![NumPy](https://img.shields.io/badge/NumPy-013243?style=flat-square&logo=numpy&logoColor=white) |
+| **Core & Desktop Engine** | ![Python](https://img.shields.io/badge/Python_3.12-3776AB?style=flat-square&logo=python&logoColor=white) ![PyWebView](https://img.shields.io/badge/PyWebView-1B1F23?style=flat-square) ![macOS](https://img.shields.io/badge/macOS-000000?style=flat-square&logo=apple&logoColor=white) ![Windows](https://img.shields.io/badge/Windows-0078D6?style=flat-square&logo=windows&logoColor=white) ![Linux](https://img.shields.io/badge/Linux-FCC624?style=flat-square&logo=linux&logoColor=black) ![NumPy](https://img.shields.io/badge/NumPy-013243?style=flat-square&logo=numpy&logoColor=white) |
 | **Brain & Reasoning LLMs** | ![OpenAI Codex](https://img.shields.io/badge/OpenAI_Codex_Plus_/_GPT--4o-412991?style=flat-square&logo=openai&logoColor=white) ![Claude](https://img.shields.io/badge/Anthropic_Claude-D97706?style=flat-square&logo=anthropic&logoColor=white) ![Gemini](https://img.shields.io/badge/Google_Gemini-8E75C2?style=flat-square&logo=google&logoColor=white) ![Ollama](https://img.shields.io/badge/Ollama_(Qwen/LLaMA)-000000?style=flat-square&logo=ollama&logoColor=white) |
 | **Long-Term Memory** | ![Obsidian](https://img.shields.io/badge/Obsidian_Markdown_Vault-483699?style=flat-square&logo=obsidian&logoColor=white) ![IPC Bus](https://img.shields.io/badge/JSON_State_Bus-333333?style=flat-square) |
 | **Speech-to-Text (STT)** | ![Faster-Whisper](https://img.shields.io/badge/Faster--Whisper_(Local_int8)-000000?style=flat-square&logo=openai&logoColor=white) ![Google Speech](https://img.shields.io/badge/Google_Speech_STT-4285F4?style=flat-square&logo=google&logoColor=white) |
@@ -64,10 +64,16 @@ flowchart TB
 
 ## 🚀 Quick Start
 
-Double-click **`Lugalay.app`** in `/Applications`, or run:
+Download the pre-built application for your operating system from [GitHub Releases](https://github.com/burmeseitman/lugalay/releases):
+
+* **macOS (Apple Silicon & Intel)**: Open the `.dmg` file and drag `Lugalay.app` to `/Applications`.
+* **Windows (x64)**: Unzip `Lugalay-windows-x86_64.zip` and run `Lugalay.exe`.
+* **Linux (x64)**: Extract `Lugalay-linux-x86_64.tar.gz` and run `./Lugalay`.
+
+Or run directly from source:
 
 ```bash
-open ~/Applications/Lugalay.app
+python3 agent/app.py
 ```
 
 Then just talk. There is no key to hold: it calibrates the room, listens to your voice, and speaks back naturally.
@@ -83,7 +89,7 @@ Then just talk. There is no key to hold: it calibrates the room, listens to your
 | **B** | Overlay mode: pins transparent avatar directly onto your desktop |
 | **F** | Fullscreen toggle |
 | **H** | Toggle Hands & Vision board |
-| **⌘Q** | Quit (cleanly terminates audio loop, servers, and window) |
+| **⌘Q / Ctrl+Q** | Quit (cleanly terminates audio loop, servers, and window) |
 
 ---
 
@@ -141,9 +147,11 @@ Run diagnostics from the repository root:
 ./agent/voice/diagnose.sh lang      # Test language identification
 ```
 
-To build a standalone macOS application:
+To build standalone application binaries locally:
 
 ```bash
-/Users/minhtet/Projects/lugalay/agent/voice/.venv/bin/pyinstaller --noconfirm --clean packaging/lugalay.spec
+pyinstaller --noconfirm --clean packaging/lugalay.spec
+
+# On macOS (to apply code signature):
 bash packaging/sign.sh dist/Lugalay.app
 ```
